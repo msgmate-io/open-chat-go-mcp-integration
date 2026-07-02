@@ -5,8 +5,10 @@ import (
 	"backend/database"
 	"backend/server/util"
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"regexp"
 	"sort"
@@ -42,10 +44,30 @@ var mcpAPIRoutes = []string{
 	"POST /api/v1/integrations/mcp/servers/{server_name}/discover",
 }
 
+//go:embed frontend_assets
+var mcpFrontendAssets embed.FS
+
+var mcpFrontendPages = []integrationinterface.FrontendPage{
+	{
+		Route:       "/integrations/mcp/servers",
+		Public:      false,
+		Description: "MCP server list and management links.",
+		AssetPath:   "servers/index.html",
+	},
+	{
+		Route:       "/integrations/mcp/servers/add",
+		Public:      false,
+		Description: "MCP add-server form page.",
+		AssetPath:   "servers/add/index.html",
+	},
+}
+
 func init() {
 	integrationinterface.MustRegister(integrationinterface.Definition{
-		Name:      "mcp",
-		APIRoutes: append([]string(nil), mcpAPIRoutes...),
+		Name:           "mcp",
+		APIRoutes:      append([]string(nil), mcpAPIRoutes...),
+		FrontendPages:  append([]integrationinterface.FrontendPage(nil), mcpFrontendPages...),
+		FrontendAssets: mustSubFS(mcpFrontendAssets, "frontend_assets"),
 		ModelProviders: []func() []interface{}{
 			func() []interface{} {
 				return []interface{}{&database.MCPIntegrationConfig{}}
@@ -64,6 +86,14 @@ func init() {
 			},
 		},
 	})
+}
+
+func mustSubFS(fsys fs.FS, dir string) fs.FS {
+	sub, err := fs.Sub(fsys, dir)
+	if err != nil {
+		panic(err)
+	}
+	return sub
 }
 
 func registerRoutes(v1Private *http.ServeMux, _ *http.ServeMux) {
