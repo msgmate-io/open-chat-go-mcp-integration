@@ -25,6 +25,7 @@ require (
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/msgmate-io/go-tool-interface v0.0.0 // indirect
+	github.com/msgmate-io/rest-api-tool-integration v0.0.0 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/redis/go-redis/v9 v9.14.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
@@ -49,3 +50,5 @@ replace backend => ../../../backend
 replace github.com/msgmate-io/go-integration-interface => ../../go_integration_interface
 
 replace github.com/msgmate-io/go-tool-interface => ../../go_tool_interface
+
+replace github.com/msgmate-io/rest-api-tool-integration => ../rest_api_tool_integration

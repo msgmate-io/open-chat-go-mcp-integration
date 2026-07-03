@@ -104,6 +104,9 @@ var mcpAPIRoutes = []string{
 //go:embed frontend_assets
 var mcpFrontendAssets embed.FS
 
+//go:embed README.md
+var mcpReadmeMarkdown string
+
 var mcpFrontendPages = []integrationinterface.FrontendPage{
 	{
 		Route:       "/integrations/mcp/servers",
@@ -122,6 +125,7 @@ var mcpFrontendPages = []integrationinterface.FrontendPage{
 func init() {
 	integrationinterface.MustRegister(integrationinterface.Definition{
 		Name:           "mcp",
+		ReadmeMarkdown: strings.TrimSpace(mcpReadmeMarkdown),
 		APIRoutes:      append([]string(nil), mcpAPIRoutes...),
 		FrontendPages:  append([]integrationinterface.FrontendPage(nil), mcpFrontendPages...),
 		FrontendAssets: mustSubFS(mcpFrontendAssets, "frontend_assets"),
