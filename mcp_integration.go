@@ -101,6 +101,95 @@ var mcpAPIRoutes = []string{
 	"POST /api/v1/integrations/mcp/servers/{server_name}/auth/clear",
 }
 
+var mcpAPIRouteDocs = []integrationinterface.APIRouteDoc{
+	{
+		Route:        mcpAPIRoutes[0],
+		Summary:      "List MCP servers",
+		Description:  "List owner-scoped MCP servers registered via the MCP integration.",
+		RequiredAuth: []string{"SessionAuth"},
+	},
+	{
+		Route:        mcpAPIRoutes[1],
+		Summary:      "Create MCP server",
+		Description:  "Create an owner-scoped MCP server registration.",
+		RequiredAuth: []string{"SessionAuth"},
+	},
+	{
+		Route:        mcpAPIRoutes[2],
+		Summary:      "Update MCP server",
+		Description:  "Update an owner-scoped MCP server registration.",
+		RequiredAuth: []string{"SessionAuth"},
+		Parameters: []integrationinterface.APIRouteParameter{
+			{Name: "server_name", In: "path", Type: "string", Required: true, Description: "Server Name"},
+		},
+	},
+	{
+		Route:        mcpAPIRoutes[3],
+		Summary:      "Delete MCP server",
+		Description:  "Delete an owner-scoped MCP server registration.",
+		RequiredAuth: []string{"SessionAuth"},
+		Parameters: []integrationinterface.APIRouteParameter{
+			{Name: "server_name", In: "path", Type: "string", Required: true, Description: "Server Name"},
+		},
+	},
+	{
+		Route:        mcpAPIRoutes[4],
+		Summary:      "Discover MCP server tools",
+		Description:  "Calls tools/list on a registered MCP server.",
+		RequiredAuth: []string{"SessionAuth"},
+		Parameters: []integrationinterface.APIRouteParameter{
+			{Name: "server_name", In: "path", Type: "string", Required: true, Description: "Server Name"},
+		},
+	},
+	{
+		Route:        mcpAPIRoutes[5],
+		Summary:      "MCP OAuth callback endpoint",
+		Description:  "Completes OAuth flow using code+state query params and redirects to integration UI.",
+		RequiredAuth: []string{"SessionAuth"},
+		Parameters: []integrationinterface.APIRouteParameter{
+			{Name: "code", In: "query", Type: "string", Required: true, Description: "OAuth authorization code"},
+			{Name: "state", In: "query", Type: "string", Required: true, Description: "OAuth state value"},
+			{Name: "error", In: "query", Type: "string", Required: false, Description: "OAuth provider error code"},
+		},
+	},
+	{
+		Route:        mcpAPIRoutes[6],
+		Summary:      "Get MCP server auth status",
+		Description:  "Returns current authentication status for a registered MCP server.",
+		RequiredAuth: []string{"SessionAuth"},
+		Parameters: []integrationinterface.APIRouteParameter{
+			{Name: "server_name", In: "path", Type: "string", Required: true, Description: "Server Name"},
+		},
+	},
+	{
+		Route:        mcpAPIRoutes[7],
+		Summary:      "Start MCP server auth flow",
+		Description:  "Starts authentication flow for a registered MCP server.",
+		RequiredAuth: []string{"SessionAuth"},
+		Parameters: []integrationinterface.APIRouteParameter{
+			{Name: "server_name", In: "path", Type: "string", Required: true, Description: "Server Name"},
+		},
+	},
+	{
+		Route:        mcpAPIRoutes[8],
+		Summary:      "Complete MCP server auth flow",
+		Description:  "Completes authentication flow and stores auth_data server-side.",
+		RequiredAuth: []string{"SessionAuth"},
+		Parameters: []integrationinterface.APIRouteParameter{
+			{Name: "server_name", In: "path", Type: "string", Required: true, Description: "Server Name"},
+		},
+	},
+	{
+		Route:        mcpAPIRoutes[9],
+		Summary:      "Clear MCP server auth data",
+		Description:  "Clears stored auth_data and pending auth session for a server.",
+		RequiredAuth: []string{"SessionAuth"},
+		Parameters: []integrationinterface.APIRouteParameter{
+			{Name: "server_name", In: "path", Type: "string", Required: true, Description: "Server Name"},
+		},
+	},
+}
+
 //go:embed frontend_assets
 var mcpFrontendAssets embed.FS
 
@@ -127,6 +216,7 @@ func init() {
 		Name:           "mcp",
 		ReadmeMarkdown: strings.TrimSpace(mcpReadmeMarkdown),
 		APIRoutes:      append([]string(nil), mcpAPIRoutes...),
+		APIRouteDocs:   append([]integrationinterface.APIRouteDoc(nil), mcpAPIRouteDocs...),
 		FrontendPages:  append([]integrationinterface.FrontendPage(nil), mcpFrontendPages...),
 		FrontendAssets: mustSubFS(mcpFrontendAssets, "frontend_assets"),
 		ModelProviders: []func() []interface{}{
