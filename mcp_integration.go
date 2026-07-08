@@ -214,6 +214,8 @@ var mcpFrontendPages = []integrationinterface.FrontendPage{
 func init() {
 	integrationinterface.MustRegister(integrationinterface.Definition{
 		Name:           "mcp",
+		AdminOnly:      false,
+		UserAccessible: true,
 		ReadmeMarkdown: strings.TrimSpace(mcpReadmeMarkdown),
 		APIRoutes:      append([]string(nil), mcpAPIRoutes...),
 		APIRouteDocs:   append([]integrationinterface.APIRouteDoc(nil), mcpAPIRouteDocs...),
