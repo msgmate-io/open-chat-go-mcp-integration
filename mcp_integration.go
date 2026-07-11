@@ -1156,7 +1156,29 @@ func authStart(w http.ResponseWriter, r *http.Request) {
 	resp := authStartResponse{Success: true, Mode: mode}
 	switch mode {
 	case "none":
-		resp.Message = "No authentication required for this server."
+		probeConfig := map[string]interface{}{}
+		for k, v := range config {
+			probeConfig[k] = v
+		}
+		probeTimeoutSeconds := 8
+		if raw, ok := probeConfig["request_timeout_seconds"]; ok {
+			switch v := raw.(type) {
+			case float64:
+				if v >= 1 && v < float64(probeTimeoutSeconds) {
+					probeTimeoutSeconds = int(v)
+				}
+			case int:
+				if v >= 1 && v < probeTimeoutSeconds {
+					probeTimeoutSeconds = v
+				}
+			}
+		}
+		probeConfig["request_timeout_seconds"] = probeTimeoutSeconds
+		if _, err := msgmate.DiscoverMCPTools(probeConfig, map[string]interface{}{}); err != nil {
+			http.Error(w, fmt.Sprintf("connection check failed: %v", err), http.StatusBadGateway)
+			return
+		}
+		resp.Message = "No authentication required. Connection check passed."
 	case "bearer_token":
 		resp.Required = []string{"bearer_token"}
 		resp.Message = "Provide bearer_token to complete authentication."
