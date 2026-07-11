@@ -1,0 +1,29 @@
+{
+  "id": "figma",
+  "display_name": "Figma MCP",
+  "description": "Connect the hosted Figma MCP endpoint using OAuth2 and discover design tools.",
+  "default_server_name": "figma",
+  "tags": [
+    "design",
+    "oauth2",
+    "hosted"
+  ],
+  "is_recommended": true,
+  "config": {
+    "transport": "http_streamable",
+    "url": "https://mcp.figma.com/mcp",
+    "request_timeout_seconds": 25,
+    "auth": {
+      "mode": "oauth2",
+      "authorize_url": "https://www.figma.com/oauth",
+      "token_url": "https://api.figma.com/v1/oauth/token",
+      "client_id": "",
+      "client_secret": "",
+      "redirect_uri": "http://localhost:3000/callback",
+      "scopes": [
+        "file_content:read"
+      ],
+      "use_pkce": true
+    }
+  }
+}

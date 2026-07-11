@@ -93,6 +93,7 @@ var mcpAPIRoutes = []string{
 	"POST /api/v1/integrations/mcp/servers",
 	"PUT /api/v1/integrations/mcp/servers/{server_name}",
 	"DELETE /api/v1/integrations/mcp/servers/{server_name}",
+	"GET /api/v1/integrations/mcp/templates",
 	"POST /api/v1/integrations/mcp/servers/{server_name}/discover",
 	"GET /api/v1/integrations/mcp/auth/callback",
 	"GET /api/v1/integrations/mcp/servers/{server_name}/auth/status",
@@ -134,6 +135,12 @@ var mcpAPIRouteDocs = []integrationinterface.APIRouteDoc{
 	},
 	{
 		Route:        mcpAPIRoutes[4],
+		Summary:      "List MCP server templates",
+		Description:  "List built-in MCP configuration templates and setup documentation.",
+		RequiredAuth: []string{"SessionAuth"},
+	},
+	{
+		Route:        mcpAPIRoutes[5],
 		Summary:      "Discover MCP server tools",
 		Description:  "Calls tools/list on a registered MCP server.",
 		RequiredAuth: []string{"SessionAuth"},
@@ -142,7 +149,7 @@ var mcpAPIRouteDocs = []integrationinterface.APIRouteDoc{
 		},
 	},
 	{
-		Route:        mcpAPIRoutes[5],
+		Route:        mcpAPIRoutes[6],
 		Summary:      "MCP OAuth callback endpoint",
 		Description:  "Completes OAuth flow using code+state query params and redirects to integration UI.",
 		RequiredAuth: []string{"SessionAuth"},
@@ -153,7 +160,7 @@ var mcpAPIRouteDocs = []integrationinterface.APIRouteDoc{
 		},
 	},
 	{
-		Route:        mcpAPIRoutes[6],
+		Route:        mcpAPIRoutes[7],
 		Summary:      "Get MCP server auth status",
 		Description:  "Returns current authentication status for a registered MCP server.",
 		RequiredAuth: []string{"SessionAuth"},
@@ -162,7 +169,7 @@ var mcpAPIRouteDocs = []integrationinterface.APIRouteDoc{
 		},
 	},
 	{
-		Route:        mcpAPIRoutes[7],
+		Route:        mcpAPIRoutes[8],
 		Summary:      "Start MCP server auth flow",
 		Description:  "Starts authentication flow for a registered MCP server.",
 		RequiredAuth: []string{"SessionAuth"},
@@ -171,7 +178,7 @@ var mcpAPIRouteDocs = []integrationinterface.APIRouteDoc{
 		},
 	},
 	{
-		Route:        mcpAPIRoutes[8],
+		Route:        mcpAPIRoutes[9],
 		Summary:      "Complete MCP server auth flow",
 		Description:  "Completes authentication flow and stores auth_data server-side.",
 		RequiredAuth: []string{"SessionAuth"},
@@ -180,7 +187,7 @@ var mcpAPIRouteDocs = []integrationinterface.APIRouteDoc{
 		},
 	},
 	{
-		Route:        mcpAPIRoutes[9],
+		Route:        mcpAPIRoutes[10],
 		Summary:      "Clear MCP server auth data",
 		Description:  "Clears stored auth_data and pending auth session for a server.",
 		RequiredAuth: []string{"SessionAuth"},
@@ -208,6 +215,12 @@ var mcpFrontendPages = []integrationinterface.FrontendPage{
 		Public:      false,
 		Description: "MCP add-server form page.",
 		AssetPath:   "servers/add/index.html",
+	},
+	{
+		Route:       "/integrations/mcp/templates",
+		Public:      false,
+		Description: "MCP template catalog and setup guide page.",
+		AssetPath:   "templates/index.html",
 	},
 }
 
@@ -254,12 +267,13 @@ func registerRoutes(v1Private *http.ServeMux, _ *http.ServeMux) {
 	v1Private.HandleFunc(v1PrivatePattern(mcpAPIRoutes[1]), createServer)
 	v1Private.HandleFunc(v1PrivatePattern(mcpAPIRoutes[2]), updateServer)
 	v1Private.HandleFunc(v1PrivatePattern(mcpAPIRoutes[3]), deleteServer)
-	v1Private.HandleFunc(v1PrivatePattern(mcpAPIRoutes[4]), discoverServer)
-	v1Private.HandleFunc(v1PrivatePattern(mcpAPIRoutes[5]), authCallback)
-	v1Private.HandleFunc(v1PrivatePattern(mcpAPIRoutes[6]), authStatus)
-	v1Private.HandleFunc(v1PrivatePattern(mcpAPIRoutes[7]), authStart)
-	v1Private.HandleFunc(v1PrivatePattern(mcpAPIRoutes[8]), authComplete)
-	v1Private.HandleFunc(v1PrivatePattern(mcpAPIRoutes[9]), authClear)
+	v1Private.HandleFunc(v1PrivatePattern(mcpAPIRoutes[4]), listTemplates)
+	v1Private.HandleFunc(v1PrivatePattern(mcpAPIRoutes[5]), discoverServer)
+	v1Private.HandleFunc(v1PrivatePattern(mcpAPIRoutes[6]), authCallback)
+	v1Private.HandleFunc(v1PrivatePattern(mcpAPIRoutes[7]), authStatus)
+	v1Private.HandleFunc(v1PrivatePattern(mcpAPIRoutes[8]), authStart)
+	v1Private.HandleFunc(v1PrivatePattern(mcpAPIRoutes[9]), authComplete)
+	v1Private.HandleFunc(v1PrivatePattern(mcpAPIRoutes[10]), authClear)
 }
 
 func v1PrivatePattern(fullRoute string) string {
@@ -580,9 +594,6 @@ func authModeFromConfig(config map[string]interface{}) string {
 }
 
 func probeMCPAuthConnection(config map[string]interface{}, authData map[string]interface{}) bool {
-	if len(authData) == 0 {
-		return false
-	}
 	probeConfig := map[string]interface{}{}
 	for k, v := range config {
 		probeConfig[k] = v
@@ -610,7 +621,7 @@ func authStatusFor(config map[string]interface{}, authData map[string]interface{
 	connected := false
 	pending := strings.TrimSpace(session.State) != ""
 	if mode == "none" {
-		connected = true
+		connected = probeMCPAuthConnection(config, authData)
 		pending = false
 	} else {
 		connected = probeMCPAuthConnection(config, authData)

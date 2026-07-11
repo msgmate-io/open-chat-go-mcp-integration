@@ -1,0 +1,21 @@
+{
+  "id": "playwright",
+  "display_name": "Playwright MCP (Local)",
+  "description": "Connect to a locally running Playwright MCP server for browser automation tools.",
+  "default_server_name": "playwright",
+  "tags": [
+    "browser",
+    "local",
+    "automation"
+  ],
+  "is_recommended": false,
+  "config": {
+    "transport": "http_streamable",
+    "url": "http://localhost:8931/mcp",
+    "request_timeout_seconds": 10,
+    "resolve_localhost_to_host_docker_internal": true,
+    "auth": {
+      "mode": "none"
+    }
+  }
+}

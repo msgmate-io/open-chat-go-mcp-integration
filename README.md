@@ -5,9 +5,11 @@ The MCP integration lets each user register one or more remote MCP servers and u
 ## What it provides
 
 - MCP server CRUD APIs (`/api/v1/integrations/mcp/servers...`)
+- MCP template library API (`/api/v1/integrations/mcp/templates`)
 - OAuth/token connect flow for supported servers
 - Tool discovery and namespaced tool snapshots (`mcp:<integration>:<tool>`)
 - Frontend pages for server management under `/integrations/mcp/servers`
+- Frontend template catalog under `/integrations/mcp/templates`
 
 ## Typical usage
 
