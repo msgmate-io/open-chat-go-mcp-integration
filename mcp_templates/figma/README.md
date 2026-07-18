@@ -5,7 +5,7 @@ Use this template to quickly register the hosted Figma MCP server.
 ## What you need
 
 - A Figma OAuth app with a client ID (and optional client secret for confidential clients)
-- Redirect URI configured in your Figma OAuth app (default in this template: `http://localhost:3000/callback`)
+- Redirect URI configured in your Figma OAuth app (default in this template: `http://localhost:1984/callback`)
 
 ## Setup steps
 

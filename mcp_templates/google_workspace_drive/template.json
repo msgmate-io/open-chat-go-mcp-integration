@@ -1,35 +1,39 @@
 {
-  "id": "figma",
-  "display_name": "Figma MCP",
-  "description": "Connect the hosted Figma MCP endpoint using OAuth2 and discover design tools.",
-  "default_server_name": "figma",
+  "id": "google_workspace_drive",
+  "display_name": "Google Workspace Drive MCP",
+  "description": "Connect Google Drive MCP to read Google Docs and Drive files via OAuth2.",
+  "default_server_name": "google-drive",
   "tags": [
-    "design",
+    "google",
+    "workspace",
+    "drive",
+    "docs",
     "oauth2",
     "hosted"
   ],
   "is_recommended": true,
   "config": {
     "transport": "http_streamable",
-    "url": "https://mcp.figma.com/mcp",
-    "request_timeout_seconds": 25,
+    "url": "https://drivemcp.googleapis.com/mcp/v1",
+    "request_timeout_seconds": 30,
     "auth": {
       "mode": "oauth2",
-      "authorize_url": "https://www.figma.com/oauth",
-      "token_url": "https://api.figma.com/v1/oauth/token",
+      "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
+      "token_url": "https://oauth2.googleapis.com/token",
       "client_id": "",
       "client_secret": "",
       "redirect_uri": "http://localhost:1984/callback",
       "connect_fields": [
         {
           "key": "client_id",
-          "label": "Figma OAuth Client ID",
+          "label": "Google OAuth Client ID",
           "type": "text",
-          "required": true
+          "required": true,
+          "placeholder": "1234567890-abc.apps.googleusercontent.com"
         },
         {
           "key": "client_secret",
-          "label": "Figma OAuth Client Secret",
+          "label": "Google OAuth Client Secret",
           "type": "password",
           "required": false,
           "help_text": "Optional for PKCE public clients."
@@ -43,7 +47,7 @@
         }
       ],
       "scopes": [
-        "file_content:read"
+        "https://www.googleapis.com/auth/drive.readonly"
       ],
       "use_pkce": true
     }
