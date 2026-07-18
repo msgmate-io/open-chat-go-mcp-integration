@@ -364,7 +364,10 @@ func inferredOAuthConfig(config map[string]interface{}) map[string]interface{} {
 			out["redirect_uri"] = "http://localhost:1984/callback"
 		}
 		if _, ok := out["scopes"]; !ok {
-			out["scopes"] = []string{"https://www.googleapis.com/auth/drive.readonly"}
+			out["scopes"] = []string{
+				"https://www.googleapis.com/auth/drive.readonly",
+				"https://www.googleapis.com/auth/drive.file",
+			}
 		}
 		if _, ok := out["use_pkce"]; !ok {
 			out["use_pkce"] = true

@@ -47,7 +47,8 @@
         }
       ],
       "scopes": [
-        "https://www.googleapis.com/auth/drive.readonly"
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/drive.file"
       ],
       "use_pkce": true
     }
