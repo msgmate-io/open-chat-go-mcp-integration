@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -343,10 +344,27 @@ func inferredOAuthConfig(config map[string]interface{}) map[string]interface{} {
 			out["token_url"] = "https://api.figma.com/v1/oauth/token"
 		}
 		if v, _ := out["redirect_uri"].(string); strings.TrimSpace(v) == "" {
-			out["redirect_uri"] = "http://localhost:3000/callback"
+			out["redirect_uri"] = "http://localhost:1984/callback"
 		}
 		if _, ok := out["scopes"]; !ok {
 			out["scopes"] = []string{"file_content:read"}
+		}
+		if _, ok := out["use_pkce"]; !ok {
+			out["use_pkce"] = true
+		}
+	}
+	if host == "drivemcp.googleapis.com" {
+		if v, _ := out["authorize_url"].(string); strings.TrimSpace(v) == "" {
+			out["authorize_url"] = "https://accounts.google.com/o/oauth2/v2/auth"
+		}
+		if v, _ := out["token_url"].(string); strings.TrimSpace(v) == "" {
+			out["token_url"] = "https://oauth2.googleapis.com/token"
+		}
+		if v, _ := out["redirect_uri"].(string); strings.TrimSpace(v) == "" {
+			out["redirect_uri"] = "http://localhost:1984/callback"
+		}
+		if _, ok := out["scopes"]; !ok {
+			out["scopes"] = []string{"https://www.googleapis.com/auth/drive.readonly"}
 		}
 		if _, ok := out["use_pkce"]; !ok {
 			out["use_pkce"] = true
@@ -587,7 +605,7 @@ func authModeFromConfig(config map[string]interface{}) string {
 	if err != nil {
 		return mode
 	}
-	if strings.EqualFold(parsedURL.Hostname(), "mcp.figma.com") {
+	if strings.EqualFold(parsedURL.Hostname(), "mcp.figma.com") || strings.EqualFold(parsedURL.Hostname(), "drivemcp.googleapis.com") {
 		return "oauth2"
 	}
 	return mode
@@ -702,6 +720,206 @@ func extractAuthData(raw json.RawMessage) map[string]interface{} {
 	}
 	_ = json.Unmarshal(raw, &out)
 	return out
+}
+
+func parseStringArray(raw interface{}) []string {
+	arr, ok := raw.([]interface{})
+	if !ok {
+		return []string{}
+	}
+	out := make([]string, 0, len(arr))
+	for _, item := range arr {
+		s, ok := item.(string)
+		if !ok {
+			continue
+		}
+		trimmed := strings.ToLower(strings.TrimSpace(s))
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func uniqueLowerStrings(items []string) []string {
+	out := make([]string, 0, len(items))
+	seen := map[string]struct{}{}
+	for _, item := range items {
+		trimmed := strings.ToLower(strings.TrimSpace(item))
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func inferIntegrationNamesFromMCPTools(raw interface{}) []string {
+	toolsMap, ok := raw.(map[string]interface{})
+	if !ok || toolsMap == nil {
+		return []string{}
+	}
+	names := []string{}
+	for _, entry := range toolsMap {
+		toolDef, ok := entry.(map[string]interface{})
+		if !ok || toolDef == nil {
+			continue
+		}
+		integrationName, _ := toolDef["integration_name"].(string)
+		integrationName = strings.ToLower(strings.TrimSpace(integrationName))
+		if integrationName == "" {
+			continue
+		}
+		names = append(names, integrationName)
+	}
+	return uniqueLowerStrings(names)
+}
+
+func filterOutMCPToolNames(raw interface{}) []string {
+	arr, ok := raw.([]interface{})
+	if !ok {
+		return []string{}
+	}
+	out := []string{}
+	for _, item := range arr {
+		s, ok := item.(string)
+		if !ok {
+			continue
+		}
+		trimmed := strings.TrimSpace(s)
+		if trimmed == "" || strings.HasPrefix(strings.ToLower(trimmed), "mcp:") {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func mergeUniqueToolNames(base []string, extra []string) []string {
+	out := make([]string, 0, len(base)+len(extra))
+	seen := map[string]struct{}{}
+	for _, name := range base {
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	for _, name := range extra {
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out
+}
+
+func refreshMCPSnapshotInConfig(config map[string]interface{}, rowsByName map[string]database.MCPIntegrationConfig) {
+	integrationNames := parseStringArray(config["integrations"])
+	inferredNames := inferIntegrationNamesFromMCPTools(config["mcp_tools"])
+	selectedRows := []database.MCPIntegrationConfig{}
+	for _, name := range uniqueLowerStrings(append(integrationNames, inferredNames...)) {
+		if row, ok := rowsByName[name]; ok {
+			selectedRows = append(selectedRows, row)
+		}
+	}
+
+	baseTools := filterOutMCPToolNames(config["tools"])
+	if len(selectedRows) == 0 {
+		delete(config, "mcp_tools")
+		config["tools"] = baseTools
+		return
+	}
+
+	mcpTools, mcpToolNames, err := msgmate.BuildMCPToolsSnapshotFromIntegrations(selectedRows)
+	if err != nil {
+		return
+	}
+	config["mcp_tools"] = mcpTools
+	config["tools"] = mergeUniqueToolNames(baseTools, mcpToolNames)
+}
+
+func refreshOwnerBotMCPToolSnapshots(DB *gorm.DB, ownerUserID uint) error {
+	enabledMCPRows := []database.MCPIntegrationConfig{}
+	if err := DB.Where("owner_user_id = ? AND enabled = ?", ownerUserID, true).Find(&enabledMCPRows).Error; err != nil {
+		return err
+	}
+	rowsByName := map[string]database.MCPIntegrationConfig{}
+	for _, row := range enabledMCPRows {
+		rowsByName[strings.ToLower(strings.TrimSpace(row.Name))] = row
+	}
+
+	botRows := []database.BotRuntimeConfig{}
+	if err := DB.Where("owner_user_id = ?", ownerUserID).Find(&botRows).Error; err != nil {
+		return err
+	}
+
+	botUserIDs := make([]uint, 0, len(botRows))
+	for _, bot := range botRows {
+		botUserIDs = append(botUserIDs, bot.BotUserId)
+		config := map[string]interface{}{}
+		if len(bot.DefaultSharedConfig) > 0 {
+			if err := json.Unmarshal(bot.DefaultSharedConfig, &config); err != nil {
+				continue
+			}
+		}
+
+		refreshMCPSnapshotInConfig(config, rowsByName)
+
+		encoded, err := json.Marshal(config)
+		if err != nil {
+			continue
+		}
+		if err := DB.Model(&bot).Update("default_shared_config", json.RawMessage(encoded)).Error; err != nil {
+			continue
+		}
+	}
+
+	if len(botUserIDs) == 0 {
+		return nil
+	}
+
+	sharedConfigs := []database.SharedChatConfig{}
+	if err := DB.Model(&database.SharedChatConfig{}).
+		Joins("JOIN chats ON chats.shared_config_id = shared_chat_configs.id").
+		Where("chats.user1_id IN ? OR chats.user2_id IN ?", botUserIDs, botUserIDs).
+		Group("shared_chat_configs.id").
+		Find(&sharedConfigs).Error; err != nil {
+		return err
+	}
+
+	for _, shared := range sharedConfigs {
+		config := map[string]interface{}{}
+		if len(shared.ConfigData) > 0 {
+			if err := json.Unmarshal(shared.ConfigData, &config); err != nil {
+				continue
+			}
+		}
+
+		refreshMCPSnapshotInConfig(config, rowsByName)
+
+		encoded, err := json.Marshal(config)
+		if err != nil {
+			continue
+		}
+		if err := DB.Model(&shared).Update("config_data", json.RawMessage(encoded)).Error; err != nil {
+			continue
+		}
+	}
+
+	return nil
 }
 
 func loadOwnedServer(DB *gorm.DB, ownerUserID uint, name string) (database.MCPIntegrationConfig, error) {
@@ -1003,6 +1221,9 @@ func discoverServer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Discovery failed: %v", err), http.StatusBadGateway)
 		return
 	}
+	if err := refreshOwnerBotMCPToolSnapshots(DB, user.ID); err != nil {
+		log.Printf("mcp discover snapshot refresh failed for user %d: %v", user.ID, err)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "count": len(tools), "tools": tools})
 }
@@ -1110,6 +1331,9 @@ func authCallback(w http.ResponseWriter, r *http.Request) {
 		errMsg := url.QueryEscape("Failed to persist auth data")
 		http.Redirect(w, r, "/integrations/mcp/servers?auth_error="+errMsg, http.StatusFound)
 		return
+	}
+	if err := refreshOwnerBotMCPToolSnapshots(DB, user.ID); err != nil {
+		log.Printf("mcp auth callback snapshot refresh failed for user %d: %v", user.ID, err)
 	}
 	http.Redirect(w, r, "/integrations/mcp/servers?auth_success=1&server="+url.QueryEscape(row.Name), http.StatusFound)
 }
@@ -1460,6 +1684,9 @@ func authComplete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to store auth data", http.StatusInternalServerError)
 		return
 	}
+	if err := refreshOwnerBotMCPToolSnapshots(DB, user.ID); err != nil {
+		log.Printf("mcp auth complete snapshot refresh failed for user %d: %v", user.ID, err)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "auth_mode": mode})
@@ -1504,6 +1731,9 @@ func authClear(w http.ResponseWriter, r *http.Request) {
 	}).Error; err != nil {
 		http.Error(w, "Failed to clear auth data", http.StatusInternalServerError)
 		return
+	}
+	if err := refreshOwnerBotMCPToolSnapshots(DB, user.ID); err != nil {
+		log.Printf("mcp auth clear snapshot refresh failed for user %d: %v", user.ID, err)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})

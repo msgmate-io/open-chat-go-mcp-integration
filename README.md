@@ -11,6 +11,18 @@ The MCP integration lets each user register one or more remote MCP servers and u
 - Frontend pages for server management under `/integrations/mcp/servers`
 - Frontend template catalog under `/integrations/mcp/templates`
 
+## Built-in templates
+
+- Figma MCP (hosted OAuth2)
+- Playwright MCP (local no-auth)
+- Google Workspace Drive MCP (hosted OAuth2, Docs/Drive read access)
+
+## Template-driven auth fields
+
+- OAuth templates can provide `config.auth.connect_fields` to define UI input fields.
+- The MCP servers page renders these fields dynamically in the connect dialog.
+- If `connect_fields` is missing, the UI falls back to generic OAuth defaults (`client_id`, `client_secret`, `redirect_uri`).
+
 ## Typical usage
 
 1. Open `/integrations/mcp/servers`
