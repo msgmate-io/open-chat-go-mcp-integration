@@ -704,6 +704,61 @@ func authScopes(authCfg map[string]interface{}) string {
 	return ""
 }
 
+func parseScopeList(scopeRaw string) []string {
+	parts := strings.Fields(strings.TrimSpace(scopeRaw))
+	if len(parts) == 0 {
+		return []string{}
+	}
+	out := make([]string, 0, len(parts))
+	seen := map[string]struct{}{}
+	for _, part := range parts {
+		normalized := strings.TrimSpace(part)
+		if normalized == "" {
+			continue
+		}
+		if _, exists := seen[normalized]; exists {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	return out
+}
+
+func mergeScopes(scopeRaw string, required []string) string {
+	current := parseScopeList(scopeRaw)
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(current)+len(required))
+	for _, scope := range current {
+		seen[scope] = struct{}{}
+		out = append(out, scope)
+	}
+	for _, scope := range required {
+		normalized := strings.TrimSpace(scope)
+		if normalized == "" {
+			continue
+		}
+		if _, exists := seen[normalized]; exists {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	return strings.Join(out, " ")
+}
+
+func isGoogleDriveMCPConfig(config map[string]interface{}) bool {
+	if config == nil {
+		return false
+	}
+	urlRaw, _ := config["url"].(string)
+	parsed, err := url.Parse(strings.TrimSpace(urlRaw))
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(parsed.Hostname(), "drivemcp.googleapis.com")
+}
+
 func boolFromMap(m map[string]interface{}, key string, def bool) bool {
 	v, ok := m[key]
 	if !ok {
@@ -1516,6 +1571,12 @@ func authStart(w http.ResponseWriter, r *http.Request) {
 		if scopes == "" {
 			scopes = authScopes(authCfg)
 		}
+		if isGoogleDriveMCPConfig(config) {
+			scopes = mergeScopes(scopes, []string{
+				"https://www.googleapis.com/auth/drive.readonly",
+				"https://www.googleapis.com/auth/drive.file",
+			})
+		}
 		if scopes != "" {
 			q.Set("scope", scopes)
 		}
@@ -1532,6 +1593,14 @@ func authStart(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				q.Set(k, strings.TrimSpace(fmt.Sprintf("%v", v)))
+			}
+		}
+		if isGoogleDriveMCPConfig(config) {
+			if _, exists := q["prompt"]; !exists {
+				q.Set("prompt", "consent")
+			}
+			if _, exists := q["include_granted_scopes"]; !exists {
+				q.Set("include_granted_scopes", "true")
 			}
 		}
 		authorizeURL.RawQuery = q.Encode()
