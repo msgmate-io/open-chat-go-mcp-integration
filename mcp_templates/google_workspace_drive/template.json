@@ -35,8 +35,8 @@
           "key": "client_secret",
           "label": "Google OAuth Client Secret",
           "type": "password",
-          "required": false,
-          "help_text": "Optional for PKCE public clients."
+          "required": true,
+          "help_text": "Required for Google OAuth web clients."
         },
         {
           "key": "redirect_uri",

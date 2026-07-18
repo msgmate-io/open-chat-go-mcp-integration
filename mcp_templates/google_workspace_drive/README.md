@@ -5,7 +5,7 @@ Use this template to register the hosted Google Drive MCP server and pull conten
 ## What you need
 
 - A Google Cloud project with access to Google Workspace MCP preview
-- OAuth client credentials (client ID and client secret)
+- OAuth client credentials (client ID and client secret; secret is required for Google web clients)
 - Redirect URI configured in your OAuth client (default in this template: `http://localhost:1984/callback`)
 
 ## Setup steps

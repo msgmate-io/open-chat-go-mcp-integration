@@ -722,6 +722,19 @@ func extractAuthData(raw json.RawMessage) map[string]interface{} {
 	return out
 }
 
+func sortedMapKeys(raw map[string]interface{}) []string {
+	out := make([]string, 0, len(raw))
+	for key := range raw {
+		trimmed := strings.TrimSpace(key)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func parseStringArray(raw interface{}) []string {
 	arr, ok := raw.([]interface{})
 	if !ok {
@@ -931,6 +944,20 @@ func loadOwnedServer(DB *gorm.DB, ownerUserID uint, name string) (database.MCPIn
 func findOwnedServerByOAuthState(DB *gorm.DB, ownerUserID uint, state string) (database.MCPIntegrationConfig, storedOAuthSession, error) {
 	rows := []database.MCPIntegrationConfig{}
 	if err := DB.Where("owner_user_id = ?", ownerUserID).Find(&rows).Error; err != nil {
+		return database.MCPIntegrationConfig{}, storedOAuthSession{}, err
+	}
+	for _, row := range rows {
+		session := decodeStoredOAuthSession(row.AuthSession)
+		if strings.TrimSpace(session.State) == strings.TrimSpace(state) {
+			return row, session, nil
+		}
+	}
+	return database.MCPIntegrationConfig{}, storedOAuthSession{}, gorm.ErrRecordNotFound
+}
+
+func findServerByOAuthState(DB *gorm.DB, state string) (database.MCPIntegrationConfig, storedOAuthSession, error) {
+	rows := []database.MCPIntegrationConfig{}
+	if err := DB.Find(&rows).Error; err != nil {
 		return database.MCPIntegrationConfig{}, storedOAuthSession{}, err
 	}
 	for _, row := range rows {
@@ -1267,15 +1294,19 @@ func authStatus(w http.ResponseWriter, r *http.Request) {
 	auth := extractAuthData(row.AuthData)
 	session := decodeStoredOAuthSession(row.AuthSession)
 	status := authStatusFor(config, auth, session)
+	authKeys := sortedMapKeys(auth)
+	_, hasAccessToken := auth["access_token"]
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":       true,
-		"server_name":   row.Name,
-		"auth_mode":     status.Mode,
-		"connected":     status.Connected,
-		"pending":       status.Pending,
-		"has_auth_data": len(auth) > 0,
+		"success":          true,
+		"server_name":      row.Name,
+		"auth_mode":        status.Mode,
+		"connected":        status.Connected,
+		"pending":          status.Pending,
+		"has_auth_data":    len(auth) > 0,
+		"has_access_token": hasAccessToken,
+		"auth_data_keys":   authKeys,
 	})
 }
 
@@ -1288,25 +1319,37 @@ func authStatus(w http.ResponseWriter, r *http.Request) {
 // @Success      302 {string} string "redirect"
 // @Router       /api/v1/integrations/mcp/auth/callback [get]
 func authCallback(w http.ResponseWriter, r *http.Request) {
-	DB, user, err := util.GetDBAndUser(r)
-	if err != nil || user == nil {
-		http.Redirect(w, r, "/login", http.StatusFound)
-		return
-	}
 	code := strings.TrimSpace(r.URL.Query().Get("code"))
 	state := strings.TrimSpace(r.URL.Query().Get("state"))
 	providerErr := strings.TrimSpace(r.URL.Query().Get("error"))
+	DB, user, err := util.GetDBAndUser(r)
+	if err != nil {
+		http.Redirect(w, r, "/integrations/mcp/servers?auth_error=unable_to_load_context", http.StatusFound)
+		return
+	}
 	if providerErr != "" {
+		log.Printf("mcp auth callback provider error: %s", providerErr)
 		http.Redirect(w, r, "/integrations/mcp/servers?auth_error="+url.QueryEscape(providerErr), http.StatusFound)
 		return
 	}
 	if code == "" || state == "" {
+		log.Printf("mcp auth callback missing code/state")
 		http.Redirect(w, r, "/integrations/mcp/servers?auth_error=missing_code_or_state", http.StatusFound)
 		return
 	}
 
-	row, session, err := findOwnedServerByOAuthState(DB, user.ID, state)
+	var row database.MCPIntegrationConfig
+	var session storedOAuthSession
+	if user != nil {
+		row, session, err = findOwnedServerByOAuthState(DB, user.ID, state)
+	} else {
+		row, session, err = findServerByOAuthState(DB, state)
+	}
+	if err == gorm.ErrRecordNotFound {
+		row, session, err = findServerByOAuthState(DB, state)
+	}
 	if err != nil {
+		log.Printf("mcp auth callback state not found")
 		http.Redirect(w, r, "/integrations/mcp/servers?auth_error=state_not_found", http.StatusFound)
 		return
 	}
@@ -1316,6 +1359,7 @@ func authCallback(w http.ResponseWriter, r *http.Request) {
 	authCfg := inferredOAuthConfig(config)
 	tokenData, err := oauthTokenExchange(authCfg, authCompleteRequest{Code: code, State: state}, session)
 	if err != nil {
+		log.Printf("mcp auth callback token exchange failed for server %s: %v", row.Name, err)
 		errMsg := url.QueryEscape(err.Error())
 		http.Redirect(w, r, "/integrations/mcp/servers?auth_error="+errMsg, http.StatusFound)
 		return
@@ -1328,12 +1372,14 @@ func authCallback(w http.ResponseWriter, r *http.Request) {
 		"auth_data":    json.RawMessage(authJSON),
 		"auth_session": json.RawMessage("{}"),
 	}).Error; err != nil {
+		log.Printf("mcp auth callback persist failed for server %s: %v", row.Name, err)
 		errMsg := url.QueryEscape("Failed to persist auth data")
 		http.Redirect(w, r, "/integrations/mcp/servers?auth_error="+errMsg, http.StatusFound)
 		return
 	}
-	if err := refreshOwnerBotMCPToolSnapshots(DB, user.ID); err != nil {
-		log.Printf("mcp auth callback snapshot refresh failed for user %d: %v", user.ID, err)
+	log.Printf("mcp auth callback persisted auth_data for server %s", row.Name)
+	if err := refreshOwnerBotMCPToolSnapshots(DB, row.OwnerUserId); err != nil {
+		log.Printf("mcp auth callback snapshot refresh failed for user %d: %v", row.OwnerUserId, err)
 	}
 	http.Redirect(w, r, "/integrations/mcp/servers?auth_success=1&server="+url.QueryEscape(row.Name), http.StatusFound)
 }
@@ -1434,6 +1480,14 @@ func authStart(w http.ResponseWriter, r *http.Request) {
 			if strings.TrimSpace(clientSecret) == "" {
 				clientSecret = registeredSecret
 			}
+		}
+		tokenHost := ""
+		if tokenURLParsed, tokenURLErr := url.Parse(strings.TrimSpace(discovered.TokenURL)); tokenURLErr == nil {
+			tokenHost = strings.ToLower(strings.TrimSpace(tokenURLParsed.Hostname()))
+		}
+		if tokenHost == "oauth2.googleapis.com" && strings.TrimSpace(clientSecret) == "" {
+			http.Error(w, "config.auth.client_secret is required for Google OAuth web clients", http.StatusBadRequest)
+			return
 		}
 		state, err := randomURLSafeToken(24)
 		if err != nil {
@@ -1539,6 +1593,10 @@ func oauthTokenExchange(authCfg map[string]interface{}, req authCompleteRequest,
 	tokenURL, err := url.Parse(strings.TrimSpace(tokenURLRaw))
 	if err != nil {
 		return nil, fmt.Errorf("invalid config.auth.token_url")
+	}
+	tokenHost := strings.ToLower(strings.TrimSpace(tokenURL.Hostname()))
+	if tokenHost == "oauth2.googleapis.com" && strings.TrimSpace(clientSecret) == "" {
+		return nil, fmt.Errorf("config.auth.client_secret is required for Google OAuth web clients")
 	}
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
