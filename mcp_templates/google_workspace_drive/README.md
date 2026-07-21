@@ -24,12 +24,27 @@ gcloud services enable drive.googleapis.com drivemcp.googleapis.com --project=PR
 7. Create the server and click **Connect** in the MCP server list.
 8. Approve Drive access and return to Open Chat Go.
 
-## Scopes for Google Docs access
+## Scopes included by this template
 
-- Minimum read scope:
+This template now ships with broad read/write Workspace scopes so MCP clients can use the full available tool surface without additional scope edits:
+
+- Drive
+  - `https://www.googleapis.com/auth/drive`
   - `https://www.googleapis.com/auth/drive.readonly`
-- Optional write scope (if you need uploads/edits):
   - `https://www.googleapis.com/auth/drive.file`
+  - `https://www.googleapis.com/auth/drive.appdata`
+  - `https://www.googleapis.com/auth/drive.metadata`
+  - `https://www.googleapis.com/auth/drive.metadata.readonly`
+  - `https://www.googleapis.com/auth/drive.photos.readonly`
+- Docs
+  - `https://www.googleapis.com/auth/documents`
+  - `https://www.googleapis.com/auth/documents.readonly`
+- Sheets
+  - `https://www.googleapis.com/auth/spreadsheets`
+  - `https://www.googleapis.com/auth/spreadsheets.readonly`
+- Slides
+  - `https://www.googleapis.com/auth/presentations`
+  - `https://www.googleapis.com/auth/presentations.readonly`
 
 ## German quick setup (Kurzfassung)
 
@@ -37,7 +52,7 @@ gcloud services enable drive.googleapis.com drivemcp.googleapis.com --project=PR
 2. OAuth-Zustimmungsbildschirm einrichten (intern oder extern mit Testnutzern).
 3. OAuth-Client als Webanwendung erstellen.
 4. Redirect-URI in der Client-Konfiguration hinterlegen.
-5. Scope fuer Docs-Lesezugriff setzen: `https://www.googleapis.com/auth/drive.readonly`.
+5. Scopes fuer den benoetigten Workspace-Zugriff setzen (Drive/Docs/Sheets/Slides).
 
 ## Notes
 
