@@ -32,3 +32,63 @@ The MCP integration lets each user register one or more remote MCP servers and u
 5. Attach integration names in bot config `default_shared_config.integrations`
 
 Once attached, discovered tools are merged into the bot tool list.
+
+## Bootstrap from open-chat config
+
+MCP servers can be pre-registered at startup so they are usable immediately,
+without adding them through the UI first. Two equivalent surfaces feed the same
+idempotent bootstrap implementation:
+
+- backend-level `bootstrap.mcp` (`owners`/`owner` + `servers`), and
+- integration-owned `integrations.mcp.bootstrap_servers` /
+  `integrations.mcp.bootstrap_default_owners` (mapped to
+  `OCI_MCP_BOOTSTRAP_SERVERS` / `OCI_MCP_BOOTSTRAP_DEFAULT_OWNERS`).
+
+Every field except `name` is optional. A built-in template id (`template`)
+supplies the base config, and `config` is deep-merged on top of it, so an
+operator only overrides what they need (typically `auth.client_id` /
+`auth.client_secret` / `auth.redirect_uri`). `auth.client_id` and
+`auth.client_secret` stay optional; OAuth endpoints are filled from the
+template or inferred for known hosts.
+
+Existing rows are left untouched on restart unless `overwrite: true` is set,
+which preserves UI-managed configuration and completed OAuth tokens. Optional
+`auth_data` can pre-seed tokens (`bearer_token` or `access_token`) and
+`enabled` defaults to `true`.
+
+```yaml
+bootstrap:
+  mcp:
+    owners: [admin]
+    servers:
+      - name: google-drive
+        template: google_workspace_drive
+        config:
+          auth:
+            client_id: "$anchors.google_client_id"
+            client_secret: "$anchors.google_client_secret"
+            redirect_uri: "https://chat.example.com/callback"
+      - name: google-sheets
+        template: google_workspace_sheets
+        config:
+          auth:
+            client_id: "$anchors.google_client_id"
+            client_secret: "$anchors.google_client_secret"
+anchors:
+  google_client_id: "123-abc.apps.googleusercontent.com"
+  google_client_secret: "GOCSPX-..."
+```
+
+The same servers can be declared integration-owned instead:
+
+```yaml
+integrations:
+  mcp:
+    bootstrap_default_owners: "admin"
+    bootstrap_servers:
+      - name: google-drive
+        template: google_workspace_drive
+        config:
+          auth: { client_id: "...", client_secret: "..." }
+```
+
