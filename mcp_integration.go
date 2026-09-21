@@ -240,6 +240,14 @@ func init() {
 				return []interface{}{&database.MCPIntegrationConfig{}}
 			},
 		},
+		RuntimeEnvVars: []integrationinterface.RuntimeEnvVar{
+			{Key: bootstrapServersEnvKey, Sensitive: true, Description: "MCP server bootstrap spec (inline JSON object/array or path to a JSON file); settable via open-chat.json integrations.mcp.bootstrap_servers."},
+			{Key: bootstrapDefaultOwnersEnvKey, Sensitive: false, Description: "Comma-separated default bootstrap owner references; settable via open-chat.json integrations.mcp.bootstrap_default_owners."},
+		},
+		RuntimeConfigAliases: []integrationinterface.RuntimeConfigAlias{
+			{JSONKey: "bootstrap_servers", EnvKey: bootstrapServersEnvKey, Description: "open-chat.json integrations.mcp.bootstrap_servers -> " + bootstrapServersEnvKey},
+			{JSONKey: "bootstrap_default_owners", EnvKey: bootstrapDefaultOwnersEnvKey, Description: "open-chat.json integrations.mcp.bootstrap_default_owners -> " + bootstrapDefaultOwnersEnvKey},
+		},
 		RouteRegistrar: registerRoutes,
 		Functions: map[string]integrationinterface.Function{
 			"discover_tools": func(_ context.Context, payload map[string]interface{}) (interface{}, error) {
