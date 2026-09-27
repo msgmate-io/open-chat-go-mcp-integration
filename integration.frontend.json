@@ -1,0 +1,16 @@
+{
+  "pages": [
+    {
+      "source": "integrations/mcp/servers",
+      "asset": "servers/index.html"
+    },
+    {
+      "source": "integrations/mcp/servers/add",
+      "asset": "servers/add/index.html"
+    },
+    {
+      "source": "integrations/mcp/templates",
+      "asset": "templates/index.html"
+    }
+  ]
+}
