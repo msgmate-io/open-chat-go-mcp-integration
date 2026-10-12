@@ -30,7 +30,7 @@ const (
 	// The preset carries only the transport and URL; the consumer injects an
 	// owner-scoped access token, so neither a separately registered server nor
 	// a pre-provisioned admin token is required.
-	MCPPresetOpenChat = "openchat"
+	MCPPresetOpenChat = "open-chat-opencode-mcp"
 )
 
 // openChatMCPURLEnvKey overrides the derived Open-Chat MCP server URL. It is
