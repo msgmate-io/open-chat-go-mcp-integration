@@ -42,7 +42,7 @@ func TestBuiltinMCPServerSpecOpenChat(t *testing.T) {
 	})
 	t.Cleanup(func() { runtimecfg.SetAll(nil) })
 
-	spec, ok := BuiltinMCPServerSpec("openchat")
+	spec, ok := BuiltinMCPServerSpec(MCPPresetOpenChat)
 	if !ok {
 		t.Fatalf("expected the openchat preset to resolve")
 	}
