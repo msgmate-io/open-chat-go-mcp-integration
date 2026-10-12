@@ -36,6 +36,59 @@ func TestBuiltinMCPServerSpecPlaywright(t *testing.T) {
 	}
 }
 
+func TestBuiltinMCPServerSpecOpenChat(t *testing.T) {
+	runtimecfg.SetAll(map[string]runtimecfg.Value{
+		"PUBLIC_BASE_URL": {Value: "https://ci.msgmate.io/"},
+	})
+	t.Cleanup(func() { runtimecfg.SetAll(nil) })
+
+	spec, ok := BuiltinMCPServerSpec("openchat")
+	if !ok {
+		t.Fatalf("expected the openchat preset to resolve")
+	}
+	if spec.Name != MCPPresetOpenChat {
+		t.Fatalf("expected preset name %q, got %q", MCPPresetOpenChat, spec.Name)
+	}
+	if !spec.Enabled {
+		t.Fatalf("expected the built-in preset to be enabled")
+	}
+	if spec.Transport != MCPServerTransportHTTPStreamable {
+		t.Fatalf("expected http_streamable transport, got %q", spec.Transport)
+	}
+	if spec.URL != "https://ci.msgmate.io/api/v1/mcp" {
+		t.Fatalf("expected the derived MCP url, got %q", spec.URL)
+	}
+	if spec.AuthMode != "bearer_token" {
+		t.Fatalf("expected bearer_token auth mode, got %q", spec.AuthMode)
+	}
+	if len(spec.AuthData) != 0 {
+		t.Fatalf("expected the preset to carry no token, got %v", spec.AuthData)
+	}
+}
+
+func TestOpenChatMCPURLPrefersOverrideAndDeployHost(t *testing.T) {
+	runtimecfg.SetAll(map[string]runtimecfg.Value{
+		openChatMCPURLEnvKey: {Value: "https://override.example/mcp"},
+		"DEPLOY_HOST":        {Value: "ci.msgmate.io"},
+	})
+	t.Cleanup(func() { runtimecfg.SetAll(nil) })
+	if got := OpenChatMCPURL(); got != "https://override.example/mcp" {
+		t.Fatalf("expected the explicit override, got %q", got)
+	}
+
+	runtimecfg.SetAll(map[string]runtimecfg.Value{
+		"DEPLOY_HOST": {Value: "ci.msgmate.io"},
+	})
+	if got := OpenChatMCPURL(); got != "https://ci.msgmate.io/api/v1/mcp" {
+		t.Fatalf("expected the DEPLOY_HOST fallback, got %q", got)
+	}
+
+	runtimecfg.SetAll(nil)
+	if got := OpenChatMCPURL(); got != "" {
+		t.Fatalf("expected an empty URL with no config, got %q", got)
+	}
+}
+
 func TestRegisterResolveAndUnregisterMCPServerSpec(t *testing.T) {
 	db := setupMCPIntegrationTestDB(t)
 	owner := createUserForMCPIntegrationTest(t, db, "registry-owner@example.com")

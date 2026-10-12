@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"backend/database"
+	"backend/runtimecfg"
 
 	"gorm.io/gorm"
 )
@@ -24,7 +25,37 @@ const (
 // integration) can enable without a separately registered row.
 const (
 	MCPPresetPlaywright = "playwright"
+	// MCPPresetOpenChat attaches this Open-Chat deployment's own read-only
+	// interaction-history MCP server (POST /api/v1/mcp) to a consumer runtime.
+	// The preset carries only the transport and URL; the consumer injects an
+	// owner-scoped access token, so neither a separately registered server nor
+	// a pre-provisioned admin token is required.
+	MCPPresetOpenChat = "openchat"
 )
+
+// openChatMCPURLEnvKey overrides the derived Open-Chat MCP server URL. It is
+// settable directly or through open-chat.json (integrations.mcp.open_chat_mcp_url).
+const openChatMCPURLEnvKey = "OCI_OPENCHAT_MCP_URL"
+
+// OpenChatMCPURL returns the URL of this deployment's own Open-Chat MCP server
+// (the interaction-history endpoint at POST /api/v1/mcp). Resolution order:
+// an explicit OCI_OPENCHAT_MCP_URL, then the configured PUBLIC_BASE_URL, then
+// the DEPLOY_HOST used by the CI deployment. Empty when none is known.
+func OpenChatMCPURL() string {
+	if override := strings.TrimSpace(runtimecfg.GetAll()[openChatMCPURLEnvKey].Value); override != "" {
+		return override
+	}
+	if base := strings.TrimRight(strings.TrimSpace(runtimecfg.PublicBaseURL()), "/"); base != "" {
+		return base + "/api/v1/mcp"
+	}
+	if host := strings.TrimRight(strings.TrimSpace(runtimecfg.GetAll()["DEPLOY_HOST"].Value), "/"); host != "" {
+		if strings.HasPrefix(host, "http://") || strings.HasPrefix(host, "https://") {
+			return host + "/api/v1/mcp"
+		}
+		return "https://" + host + "/api/v1/mcp"
+	}
+	return ""
+}
 
 // MCPServerSpec is the transport-neutral description of one owner-scoped MCP
 // server. It is the shared abstraction other integrations consume to attach an
@@ -374,7 +405,9 @@ func refreshOwnerBotMCPToolSnapshotsBestEffort(db *gorm.DB, ownerUserID uint) {
 // for a well-known preset. The Playwright preset runs the browser next to the
 // agent (stdio), so consumers running inside the coding sandbox (eg the opencode
 // integration) can enable browser automation with a single toggle and no
-// separately registered server.
+// separately registered server. The OpenChat preset points at this
+// deployment's own interaction-history MCP server and is completed with an
+// owner-scoped bearer token by the consumer.
 func BuiltinMCPServerSpec(preset string) (MCPServerSpec, bool) {
 	switch normalizeServerName(preset) {
 	case MCPPresetPlaywright:
@@ -395,6 +428,18 @@ func BuiltinMCPServerSpec(preset string) (MCPServerSpec, bool) {
 				"--executable-path",
 				"/usr/bin/chromium-browser",
 			},
+		}, true
+	case MCPPresetOpenChat:
+		// Remote MCP server hosted by this same Open-Chat instance. The URL is
+		// derived from the deployment's configured base URL; the consumer
+		// (opencode integration) injects the owner-scoped bearer token into
+		// AuthData before rendering, so no token lives in this static preset.
+		return MCPServerSpec{
+			Name:      MCPPresetOpenChat,
+			Enabled:   true,
+			Transport: MCPServerTransportHTTPStreamable,
+			URL:       OpenChatMCPURL(),
+			AuthMode:  "bearer_token",
 		}, true
 	default:
 		return MCPServerSpec{}, false
