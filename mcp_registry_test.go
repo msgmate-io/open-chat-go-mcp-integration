@@ -66,6 +66,24 @@ func TestBuiltinMCPServerSpecOpenChat(t *testing.T) {
 	}
 }
 
+func TestBuiltinMCPServerSpecOpenChatLegacyAlias(t *testing.T) {
+	runtimecfg.SetAll(map[string]runtimecfg.Value{
+		"PUBLIC_BASE_URL": {Value: "https://ci.msgmate.io/"},
+	})
+	t.Cleanup(func() { runtimecfg.SetAll(nil) })
+
+	spec, ok := BuiltinMCPServerSpec(MCPPresetOpenChatLegacy)
+	if !ok {
+		t.Fatalf("expected the legacy openchat alias to resolve")
+	}
+	if spec.Name != MCPPresetOpenChat {
+		t.Fatalf("expected the canonical preset name %q, got %q", MCPPresetOpenChat, spec.Name)
+	}
+	if spec.URL != "https://ci.msgmate.io/api/v1/mcp" {
+		t.Fatalf("expected the derived MCP url, got %q", spec.URL)
+	}
+}
+
 func TestOpenChatMCPURLPrefersOverrideAndDeployHost(t *testing.T) {
 	runtimecfg.SetAll(map[string]runtimecfg.Value{
 		openChatMCPURLEnvKey: {Value: "https://override.example/mcp"},

@@ -31,6 +31,10 @@ const (
 	// owner-scoped access token, so neither a separately registered server nor
 	// a pre-provisioned admin token is required.
 	MCPPresetOpenChat = "open-chat-opencode-mcp"
+	// MCPPresetOpenChatLegacy is the previous name of MCPPresetOpenChat. It is
+	// kept as a backward-compatible alias so projects configured before the
+	// rename (mcp_servers: ["openchat"]) keep resolving the built-in server.
+	MCPPresetOpenChatLegacy = "openchat"
 )
 
 // openChatMCPURLEnvKey overrides the derived Open-Chat MCP server URL. It is
@@ -429,11 +433,14 @@ func BuiltinMCPServerSpec(preset string) (MCPServerSpec, bool) {
 				"/usr/bin/chromium-browser",
 			},
 		}, true
-	case MCPPresetOpenChat:
+	case MCPPresetOpenChat, MCPPresetOpenChatLegacy:
 		// Remote MCP server hosted by this same Open-Chat instance. The URL is
 		// derived from the deployment's configured base URL; the consumer
 		// (opencode integration) injects the owner-scoped bearer token into
 		// AuthData before rendering, so no token lives in this static preset.
+		// The returned Name is always the canonical preset name so consumers
+		// (which key their config by Name) render a single, stable entry even
+		// when the legacy alias is used.
 		return MCPServerSpec{
 			Name:      MCPPresetOpenChat,
 			Enabled:   true,
