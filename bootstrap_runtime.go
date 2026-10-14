@@ -1,7 +1,6 @@
 package mcpintegration
 
 import (
-	"backend/runtimecfg"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -26,7 +25,7 @@ func ApplyRuntimeConfigBootstrap(db *gorm.DB, fallbackOwner string) (BootstrapRe
 	if db == nil {
 		return BootstrapResult{}, fmt.Errorf("db is required")
 	}
-	all := runtimecfg.GetAll()
+	all := hostConfig().All()
 
 	defaultOwners := splitMCPOwnerRefs(all[bootstrapDefaultOwnersEnvKey].Value)
 	serverSpecs, err := decodeMCPSpecValue[BootstrapServerSpec](all[bootstrapServersEnvKey].Value)

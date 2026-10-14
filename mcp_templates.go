@@ -1,7 +1,6 @@
 package mcpintegration
 
 import (
-	"backend/server/util"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
@@ -191,7 +190,7 @@ func loadMCPTemplateLibrary() ([]mcpTemplateResponseRow, error) {
 // @Success      200 {object} map[string]interface{}
 // @Router       /api/v1/integrations/mcp/templates [get]
 func listTemplates(w http.ResponseWriter, r *http.Request) {
-	_, user, err := util.GetDBAndUser(r)
+	_, user, err := dbAndUser(r)
 	if err != nil {
 		http.Error(w, "Unable to get database or user", http.StatusBadRequest)
 		return

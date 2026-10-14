@@ -1,10 +1,6 @@
 package mcpintegration
 
 import (
-	"backend/api/msgmate"
-	"backend/database"
-	"backend/runtimecfg"
-	"backend/server/util"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -239,7 +235,7 @@ func init() {
 		FrontendAssets: mustSubFS(mcpFrontendAssets, "frontend_assets"),
 		ModelProviders: []func() []interface{}{
 			func() []interface{} {
-				return []interface{}{&database.MCPIntegrationConfig{}}
+				return []interface{}{&MCPIntegrationConfig{}}
 			},
 		},
 		RuntimeEnvVars: []integrationinterface.RuntimeEnvVar{
@@ -255,7 +251,7 @@ func init() {
 			"discover_tools": func(_ context.Context, payload map[string]interface{}) (interface{}, error) {
 				config, _ := payload["config"].(map[string]interface{})
 				auth, _ := payload["auth_data"].(map[string]interface{})
-				tools, err := msgmate.DiscoverMCPTools(config, auth)
+				tools, err := DiscoverMCPTools(config, auth)
 				if err != nil {
 					return nil, err
 				}
@@ -386,7 +382,7 @@ func inferredOAuthConfig(config map[string]interface{}) map[string]interface{} {
 // Host, so an OAuth redirect always returns to the host the user is on instead
 // of a hard-coded localhost. Mirrors the helpers used elsewhere in the backend.
 func requestPublicBaseURL(r *http.Request) string {
-	if configured := strings.TrimRight(strings.TrimSpace(runtimecfg.PublicBaseURL()), "/"); configured != "" {
+	if configured := strings.TrimRight(strings.TrimSpace(publicBaseURL()), "/"); configured != "" {
 		return configured
 	}
 	if r == nil {
@@ -705,7 +701,7 @@ func probeMCPAuthConnection(config map[string]interface{}, authData map[string]i
 		}
 	}
 	probeConfig["request_timeout_seconds"] = timeoutSeconds
-	_, err := msgmate.DiscoverMCPTools(probeConfig, authData)
+	_, err := DiscoverMCPTools(probeConfig, authData)
 	return err == nil
 }
 
@@ -969,10 +965,10 @@ func mergeUniqueToolNames(base []string, extra []string) []string {
 	return out
 }
 
-func refreshMCPSnapshotInConfig(config map[string]interface{}, rowsByName map[string]database.MCPIntegrationConfig) {
+func refreshMCPSnapshotInConfig(config map[string]interface{}, rowsByName map[string]MCPIntegrationConfig) {
 	integrationNames := parseStringArray(config["integrations"])
 	inferredNames := inferIntegrationNamesFromMCPTools(config["mcp_tools"])
-	selectedRows := []database.MCPIntegrationConfig{}
+	selectedRows := []MCPIntegrationConfig{}
 	for _, name := range uniqueLowerStrings(append(integrationNames, inferredNames...)) {
 		if row, ok := rowsByName[name]; ok {
 			selectedRows = append(selectedRows, row)
@@ -986,7 +982,7 @@ func refreshMCPSnapshotInConfig(config map[string]interface{}, rowsByName map[st
 		return
 	}
 
-	mcpTools, mcpToolNames, err := msgmate.BuildMCPToolsSnapshotFromIntegrations(selectedRows)
+	mcpTools, mcpToolNames, err := BuildMCPToolsSnapshotFromIntegrations(selectedRows)
 	if err != nil {
 		return
 	}
@@ -995,18 +991,18 @@ func refreshMCPSnapshotInConfig(config map[string]interface{}, rowsByName map[st
 }
 
 func refreshOwnerBotMCPToolSnapshots(DB *gorm.DB, ownerUserID uint) error {
-	enabledMCPRows := []database.MCPIntegrationConfig{}
+	enabledMCPRows := []MCPIntegrationConfig{}
 	if err := DB.Where("owner_user_id = ? AND enabled = ?", ownerUserID, true).Find(&enabledMCPRows).Error; err != nil {
 		return err
 	}
-	rowsByName := map[string]database.MCPIntegrationConfig{}
+	rowsByName := map[string]MCPIntegrationConfig{}
 	for i := range enabledMCPRows {
 		row := enabledMCPRows[i]
 		ensureFreshOAuthAuthData(DB, &row)
 		rowsByName[strings.ToLower(strings.TrimSpace(row.Name))] = row
 	}
 
-	botRows := []database.BotRuntimeConfig{}
+	botRows := []BotRuntimeConfig{}
 	if err := DB.Where("owner_user_id = ?", ownerUserID).Find(&botRows).Error; err != nil {
 		return err
 	}
@@ -1036,8 +1032,8 @@ func refreshOwnerBotMCPToolSnapshots(DB *gorm.DB, ownerUserID uint) error {
 		return nil
 	}
 
-	sharedConfigs := []database.SharedChatConfig{}
-	if err := DB.Model(&database.SharedChatConfig{}).
+	sharedConfigs := []SharedChatConfig{}
+	if err := DB.Model(&SharedChatConfig{}).
 		Joins("JOIN chats ON chats.shared_config_id = shared_chat_configs.id").
 		Where("chats.user1_id IN ? OR chats.user2_id IN ?", botUserIDs, botUserIDs).
 		Group("shared_chat_configs.id").
@@ -1067,16 +1063,16 @@ func refreshOwnerBotMCPToolSnapshots(DB *gorm.DB, ownerUserID uint) error {
 	return nil
 }
 
-func loadOwnedServer(DB *gorm.DB, ownerUserID uint, name string) (database.MCPIntegrationConfig, error) {
-	row := database.MCPIntegrationConfig{}
+func loadOwnedServer(DB *gorm.DB, ownerUserID uint, name string) (MCPIntegrationConfig, error) {
+	row := MCPIntegrationConfig{}
 	err := DB.Where("owner_user_id = ? AND name = ?", ownerUserID, name).First(&row).Error
 	return row, err
 }
 
-func findOwnedServerByOAuthState(DB *gorm.DB, ownerUserID uint, state string) (database.MCPIntegrationConfig, storedOAuthSession, error) {
-	rows := []database.MCPIntegrationConfig{}
+func findOwnedServerByOAuthState(DB *gorm.DB, ownerUserID uint, state string) (MCPIntegrationConfig, storedOAuthSession, error) {
+	rows := []MCPIntegrationConfig{}
 	if err := DB.Where("owner_user_id = ?", ownerUserID).Find(&rows).Error; err != nil {
-		return database.MCPIntegrationConfig{}, storedOAuthSession{}, err
+		return MCPIntegrationConfig{}, storedOAuthSession{}, err
 	}
 	for _, row := range rows {
 		session := decodeStoredOAuthSession(row.AuthSession)
@@ -1084,13 +1080,13 @@ func findOwnedServerByOAuthState(DB *gorm.DB, ownerUserID uint, state string) (d
 			return row, session, nil
 		}
 	}
-	return database.MCPIntegrationConfig{}, storedOAuthSession{}, gorm.ErrRecordNotFound
+	return MCPIntegrationConfig{}, storedOAuthSession{}, gorm.ErrRecordNotFound
 }
 
-func findServerByOAuthState(DB *gorm.DB, state string) (database.MCPIntegrationConfig, storedOAuthSession, error) {
-	rows := []database.MCPIntegrationConfig{}
+func findServerByOAuthState(DB *gorm.DB, state string) (MCPIntegrationConfig, storedOAuthSession, error) {
+	rows := []MCPIntegrationConfig{}
 	if err := DB.Find(&rows).Error; err != nil {
-		return database.MCPIntegrationConfig{}, storedOAuthSession{}, err
+		return MCPIntegrationConfig{}, storedOAuthSession{}, err
 	}
 	for _, row := range rows {
 		session := decodeStoredOAuthSession(row.AuthSession)
@@ -1098,7 +1094,7 @@ func findServerByOAuthState(DB *gorm.DB, state string) (database.MCPIntegrationC
 			return row, session, nil
 		}
 	}
-	return database.MCPIntegrationConfig{}, storedOAuthSession{}, gorm.ErrRecordNotFound
+	return MCPIntegrationConfig{}, storedOAuthSession{}, gorm.ErrRecordNotFound
 }
 
 func validateServerRequest(req serverUpsertRequest) (serverUpsertRequest, error) {
@@ -1135,7 +1131,7 @@ func validateServerRequest(req serverUpsertRequest) (serverUpsertRequest, error)
 	return req, nil
 }
 
-func decodeServerRow(row database.MCPIntegrationConfig) serverResponseRow {
+func decodeServerRow(row MCPIntegrationConfig) serverResponseRow {
 	config := map[string]interface{}{}
 	_ = json.Unmarshal(row.Config, &config)
 	authData := extractAuthData(row.AuthData)
@@ -1164,7 +1160,7 @@ func decodeServerRow(row database.MCPIntegrationConfig) serverResponseRow {
 // @Success      200 {object} map[string]interface{}
 // @Router       /api/v1/integrations/mcp/servers [get]
 func listServers(w http.ResponseWriter, r *http.Request) {
-	DB, user, err := util.GetDBAndUser(r)
+	DB, user, err := dbAndUser(r)
 	if err != nil {
 		http.Error(w, "Unable to get database or user", http.StatusBadRequest)
 		return
@@ -1173,8 +1169,8 @@ func listServers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-	rows := []database.MCPIntegrationConfig{}
-	if err := DB.Where("owner_user_id = ?", user.ID).Order("name asc").Find(&rows).Error; err != nil {
+	rows := []MCPIntegrationConfig{}
+	if err := DB.Where("owner_user_id = ?", user.ID()).Order("name asc").Find(&rows).Error; err != nil {
 		http.Error(w, "Failed to list MCP servers", http.StatusInternalServerError)
 		return
 	}
@@ -1197,7 +1193,7 @@ func listServers(w http.ResponseWriter, r *http.Request) {
 // @Success      200 {object} map[string]interface{}
 // @Router       /api/v1/integrations/mcp/servers [post]
 func createServer(w http.ResponseWriter, r *http.Request) {
-	DB, user, err := util.GetDBAndUser(r)
+	DB, user, err := dbAndUser(r)
 	if err != nil {
 		http.Error(w, "Unable to get database or user", http.StatusBadRequest)
 		return
@@ -1221,8 +1217,8 @@ func createServer(w http.ResponseWriter, r *http.Request) {
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
-	row := database.MCPIntegrationConfig{
-		OwnerUserId: user.ID,
+	row := MCPIntegrationConfig{
+		OwnerUserId: user.ID(),
 		Name:        req.Name,
 		Config:      configJSON,
 		AuthData:    json.RawMessage("{}"),
@@ -1252,7 +1248,7 @@ func createServer(w http.ResponseWriter, r *http.Request) {
 // @Success      200 {object} map[string]interface{}
 // @Router       /api/v1/integrations/mcp/servers/{server_name} [put]
 func updateServer(w http.ResponseWriter, r *http.Request) {
-	DB, user, err := util.GetDBAndUser(r)
+	DB, user, err := dbAndUser(r)
 	if err != nil {
 		http.Error(w, "Unable to get database or user", http.StatusBadRequest)
 		return
@@ -1279,8 +1275,8 @@ func updateServer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	var existing database.MCPIntegrationConfig
-	if err := DB.Where("owner_user_id = ? AND name = ?", user.ID, name).First(&existing).Error; err != nil {
+	var existing MCPIntegrationConfig
+	if err := DB.Where("owner_user_id = ? AND name = ?", user.ID(), name).First(&existing).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "server not found", http.StatusNotFound)
 			return
@@ -1320,7 +1316,7 @@ func updateServer(w http.ResponseWriter, r *http.Request) {
 // @Success      200 {object} map[string]interface{}
 // @Router       /api/v1/integrations/mcp/servers/{server_name} [delete]
 func deleteServer(w http.ResponseWriter, r *http.Request) {
-	DB, user, err := util.GetDBAndUser(r)
+	DB, user, err := dbAndUser(r)
 	if err != nil {
 		http.Error(w, "Unable to get database or user", http.StatusBadRequest)
 		return
@@ -1334,7 +1330,7 @@ func deleteServer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server_name is required", http.StatusBadRequest)
 		return
 	}
-	if err := DB.Where("owner_user_id = ? AND name = ?", user.ID, name).Delete(&database.MCPIntegrationConfig{}).Error; err != nil {
+	if err := DB.Where("owner_user_id = ? AND name = ?", user.ID(), name).Delete(&MCPIntegrationConfig{}).Error; err != nil {
 		http.Error(w, "Failed to delete MCP server", http.StatusInternalServerError)
 		return
 	}
@@ -1352,7 +1348,7 @@ func deleteServer(w http.ResponseWriter, r *http.Request) {
 // @Success      200 {object} map[string]interface{}
 // @Router       /api/v1/integrations/mcp/servers/{server_name}/discover [post]
 func discoverServer(w http.ResponseWriter, r *http.Request) {
-	DB, user, err := util.GetDBAndUser(r)
+	DB, user, err := dbAndUser(r)
 	if err != nil {
 		http.Error(w, "Unable to get database or user", http.StatusBadRequest)
 		return
@@ -1366,21 +1362,21 @@ func discoverServer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server_name is required", http.StatusBadRequest)
 		return
 	}
-	var row database.MCPIntegrationConfig
-	if err := DB.Where("owner_user_id = ? AND name = ?", user.ID, name).First(&row).Error; err != nil {
+	var row MCPIntegrationConfig
+	if err := DB.Where("owner_user_id = ? AND name = ?", user.ID(), name).First(&row).Error; err != nil {
 		http.Error(w, "server not found", http.StatusNotFound)
 		return
 	}
 	config := map[string]interface{}{}
 	_ = json.Unmarshal(row.Config, &config)
 	auth := ensureFreshOAuthAuthData(DB, &row)
-	tools, err := msgmate.DiscoverMCPTools(config, auth)
+	tools, err := DiscoverMCPTools(config, auth)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Discovery failed: %v", err), http.StatusBadGateway)
 		return
 	}
-	if err := refreshOwnerBotMCPToolSnapshots(DB, user.ID); err != nil {
-		log.Printf("mcp discover snapshot refresh failed for user %d: %v", user.ID, err)
+	if err := refreshOwnerBotMCPToolSnapshots(DB, user.ID()); err != nil {
+		log.Printf("mcp discover snapshot refresh failed for user %d: %v", user.ID(), err)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "count": len(tools), "tools": tools})
@@ -1396,7 +1392,7 @@ func discoverServer(w http.ResponseWriter, r *http.Request) {
 // @Success      200 {object} map[string]interface{}
 // @Router       /api/v1/integrations/mcp/servers/{server_name}/auth/status [get]
 func authStatus(w http.ResponseWriter, r *http.Request) {
-	DB, user, err := util.GetDBAndUser(r)
+	DB, user, err := dbAndUser(r)
 	if err != nil {
 		http.Error(w, "Unable to get database or user", http.StatusBadRequest)
 		return
@@ -1410,7 +1406,7 @@ func authStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server_name is required", http.StatusBadRequest)
 		return
 	}
-	row, err := loadOwnedServer(DB, user.ID, name)
+	row, err := loadOwnedServer(DB, user.ID(), name)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "server not found", http.StatusNotFound)
@@ -1453,7 +1449,7 @@ func authCallback(w http.ResponseWriter, r *http.Request) {
 	code := strings.TrimSpace(r.URL.Query().Get("code"))
 	state := strings.TrimSpace(r.URL.Query().Get("state"))
 	providerErr := strings.TrimSpace(r.URL.Query().Get("error"))
-	DB, user, err := util.GetDBAndUser(r)
+	DB, user, err := dbAndUser(r)
 	if err != nil {
 		http.Redirect(w, r, "/integrations/mcp/servers?auth_error=unable_to_load_context", http.StatusFound)
 		return
@@ -1469,10 +1465,10 @@ func authCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var row database.MCPIntegrationConfig
+	var row MCPIntegrationConfig
 	var session storedOAuthSession
 	if user != nil {
-		row, session, err = findOwnedServerByOAuthState(DB, user.ID, state)
+		row, session, err = findOwnedServerByOAuthState(DB, user.ID(), state)
 	} else {
 		row, session, err = findServerByOAuthState(DB, state)
 	}
@@ -1525,7 +1521,7 @@ func authCallback(w http.ResponseWriter, r *http.Request) {
 // @Success      200 {object} map[string]interface{}
 // @Router       /api/v1/integrations/mcp/servers/{server_name}/auth/start [post]
 func authStart(w http.ResponseWriter, r *http.Request) {
-	DB, user, err := util.GetDBAndUser(r)
+	DB, user, err := dbAndUser(r)
 	if err != nil {
 		http.Error(w, "Unable to get database or user", http.StatusBadRequest)
 		return
@@ -1539,7 +1535,7 @@ func authStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server_name is required", http.StatusBadRequest)
 		return
 	}
-	row, err := loadOwnedServer(DB, user.ID, name)
+	row, err := loadOwnedServer(DB, user.ID(), name)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "server not found", http.StatusNotFound)
@@ -1575,7 +1571,7 @@ func authStart(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		probeConfig["request_timeout_seconds"] = probeTimeoutSeconds
-		if _, err := msgmate.DiscoverMCPTools(probeConfig, map[string]interface{}{}); err != nil {
+		if _, err := DiscoverMCPTools(probeConfig, map[string]interface{}{}); err != nil {
 			http.Error(w, fmt.Sprintf("connection check failed: %v", err), http.StatusBadGateway)
 			return
 		}
@@ -1956,7 +1952,7 @@ func oauthTokenRefresh(authCfg map[string]interface{}, authData map[string]inter
 // using the stored refresh_token, so a previously authorized MCP server keeps
 // working without a manual re-authentication. A nil db or a token that cannot
 // (or need not) be refreshed is returned unchanged.
-func ensureFreshOAuthAuthData(db *gorm.DB, row *database.MCPIntegrationConfig) map[string]interface{} {
+func ensureFreshOAuthAuthData(db *gorm.DB, row *MCPIntegrationConfig) map[string]interface{} {
 	authData := extractAuthData(row.AuthData)
 	if db == nil || row == nil || !oauthAuthDataNeedsRefresh(authData) {
 		return authData
@@ -1992,7 +1988,7 @@ func ensureFreshOAuthAuthData(db *gorm.DB, row *database.MCPIntegrationConfig) m
 // @Success      200 {object} map[string]interface{}
 // @Router       /api/v1/integrations/mcp/servers/{server_name}/auth/complete [post]
 func authComplete(w http.ResponseWriter, r *http.Request) {
-	DB, user, err := util.GetDBAndUser(r)
+	DB, user, err := dbAndUser(r)
 	if err != nil {
 		http.Error(w, "Unable to get database or user", http.StatusBadRequest)
 		return
@@ -2006,7 +2002,7 @@ func authComplete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server_name is required", http.StatusBadRequest)
 		return
 	}
-	row, err := loadOwnedServer(DB, user.ID, name)
+	row, err := loadOwnedServer(DB, user.ID(), name)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "server not found", http.StatusNotFound)
@@ -2081,8 +2077,8 @@ func authComplete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to store auth data", http.StatusInternalServerError)
 		return
 	}
-	if err := refreshOwnerBotMCPToolSnapshots(DB, user.ID); err != nil {
-		log.Printf("mcp auth complete snapshot refresh failed for user %d: %v", user.ID, err)
+	if err := refreshOwnerBotMCPToolSnapshots(DB, user.ID()); err != nil {
+		log.Printf("mcp auth complete snapshot refresh failed for user %d: %v", user.ID(), err)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -2099,7 +2095,7 @@ func authComplete(w http.ResponseWriter, r *http.Request) {
 // @Success      200 {object} map[string]interface{}
 // @Router       /api/v1/integrations/mcp/servers/{server_name}/auth/clear [post]
 func authClear(w http.ResponseWriter, r *http.Request) {
-	DB, user, err := util.GetDBAndUser(r)
+	DB, user, err := dbAndUser(r)
 	if err != nil {
 		http.Error(w, "Unable to get database or user", http.StatusBadRequest)
 		return
@@ -2113,7 +2109,7 @@ func authClear(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server_name is required", http.StatusBadRequest)
 		return
 	}
-	row, err := loadOwnedServer(DB, user.ID, name)
+	row, err := loadOwnedServer(DB, user.ID(), name)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			http.Error(w, "server not found", http.StatusNotFound)
@@ -2129,8 +2125,8 @@ func authClear(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to clear auth data", http.StatusInternalServerError)
 		return
 	}
-	if err := refreshOwnerBotMCPToolSnapshots(DB, user.ID); err != nil {
-		log.Printf("mcp auth clear snapshot refresh failed for user %d: %v", user.ID, err)
+	if err := refreshOwnerBotMCPToolSnapshots(DB, user.ID()); err != nil {
+		log.Printf("mcp auth clear snapshot refresh failed for user %d: %v", user.ID(), err)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})

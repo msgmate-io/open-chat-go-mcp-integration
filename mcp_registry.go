@@ -7,9 +7,6 @@ import (
 	"log"
 	"strings"
 
-	"backend/database"
-	"backend/runtimecfg"
-
 	"gorm.io/gorm"
 )
 
@@ -46,13 +43,13 @@ const openChatMCPURLEnvKey = "OCI_OPENCHAT_MCP_URL"
 // an explicit OCI_OPENCHAT_MCP_URL, then the configured PUBLIC_BASE_URL, then
 // the DEPLOY_HOST used by the CI deployment. Empty when none is known.
 func OpenChatMCPURL() string {
-	if override := strings.TrimSpace(runtimecfg.GetAll()[openChatMCPURLEnvKey].Value); override != "" {
+	if override := strings.TrimSpace(hostConfig().All()[openChatMCPURLEnvKey].Value); override != "" {
 		return override
 	}
-	if base := strings.TrimRight(strings.TrimSpace(runtimecfg.PublicBaseURL()), "/"); base != "" {
+	if base := strings.TrimRight(strings.TrimSpace(publicBaseURL()), "/"); base != "" {
 		return base + "/api/v1/mcp"
 	}
-	if host := strings.TrimRight(strings.TrimSpace(runtimecfg.GetAll()["DEPLOY_HOST"].Value), "/"); host != "" {
+	if host := strings.TrimRight(strings.TrimSpace(hostConfig().All()["DEPLOY_HOST"].Value), "/"); host != "" {
 		if strings.HasPrefix(host, "http://") || strings.HasPrefix(host, "https://") {
 			return host + "/api/v1/mcp"
 		}
@@ -180,7 +177,7 @@ func stringMapFromConfigMap(config map[string]interface{}, key string) map[strin
 
 // resolveMCPServerSpecFromRow converts a stored MCP server row into the shared
 // transport-neutral spec.
-func resolveMCPServerSpecFromRow(row database.MCPIntegrationConfig) MCPServerSpec {
+func resolveMCPServerSpecFromRow(row MCPIntegrationConfig) MCPServerSpec {
 	config := map[string]interface{}{}
 	_ = json.Unmarshal(row.Config, &config)
 	spec := MCPServerSpec{
@@ -277,7 +274,7 @@ func ResolveMCPServerSpecs(db *gorm.DB, ownerUserID uint, names []string) ([]MCP
 		query = query.Where("name IN ?", normalized)
 	}
 
-	rows := []database.MCPIntegrationConfig{}
+	rows := []MCPIntegrationConfig{}
 	if err := query.Order("name asc").Find(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -349,7 +346,7 @@ func RegisterMCPServer(db *gorm.DB, ownerUserID uint, spec MCPServerSpec) (MCPSe
 		// The Enabled column carries a gorm `default:true` tag, so a zero-value
 		// false would be omitted on insert. Create with the default and, when a
 		// disabled server is requested, persist the explicit false afterwards.
-		row := database.MCPIntegrationConfig{
+		row := MCPIntegrationConfig{
 			OwnerUserId: ownerUserID,
 			Name:        req.Name,
 			Config:      configJSON,
@@ -397,7 +394,7 @@ func UnregisterMCPServer(db *gorm.DB, ownerUserID uint, name string) error {
 	if normalized == "" {
 		return fmt.Errorf("name is required")
 	}
-	if err := db.Where("owner_user_id = ? AND name = ?", ownerUserID, normalized).Delete(&database.MCPIntegrationConfig{}).Error; err != nil {
+	if err := db.Where("owner_user_id = ? AND name = ?", ownerUserID, normalized).Delete(&MCPIntegrationConfig{}).Error; err != nil {
 		return err
 	}
 	refreshOwnerBotMCPToolSnapshotsBestEffort(db, ownerUserID)

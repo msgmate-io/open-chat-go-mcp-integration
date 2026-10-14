@@ -1,0 +1,446 @@
+package mcpintegration
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+)
+
+type mcpRPCRequest struct {
+	JSONRPC string      `json:"jsonrpc"`
+	ID      interface{} `json:"id,omitempty"`
+	Method  string      `json:"method"`
+	Params  interface{} `json:"params,omitempty"`
+}
+
+type mcpRPCError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+type mcpRPCResponse struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      interface{}     `json:"id"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *mcpRPCError    `json:"error,omitempty"`
+}
+
+type mcpIntegrationConfig struct {
+	Transport             string
+	URL                   string
+	RequestTimeoutSeconds int
+}
+
+func parseMCPIntegrationConfig(raw map[string]interface{}) (mcpIntegrationConfig, error) {
+	out := mcpIntegrationConfig{Transport: "http", RequestTimeoutSeconds: 25}
+	if raw == nil {
+		return out, fmt.Errorf("config is required")
+	}
+	if transportRaw, ok := raw["transport"]; ok {
+		if transport, ok := transportRaw.(string); ok {
+			out.Transport = strings.TrimSpace(strings.ToLower(transport))
+		}
+	}
+	if out.Transport == "" {
+		out.Transport = "http"
+	}
+	if out.Transport != "http" && out.Transport != "http_streamable" {
+		return out, fmt.Errorf("config.transport must be 'http' or 'http_streamable'")
+	}
+	urlRaw, _ := raw["url"].(string)
+	out.URL = strings.TrimSpace(urlRaw)
+	if out.URL == "" {
+		return out, fmt.Errorf("config.url is required")
+	}
+
+	parsedURL, err := url.Parse(out.URL)
+	if err != nil {
+		return out, fmt.Errorf("config.url must be a valid URL")
+	}
+	scheme := strings.ToLower(strings.TrimSpace(parsedURL.Scheme))
+	hostname := strings.ToLower(strings.TrimSpace(parsedURL.Hostname()))
+	isLoopbackHost := hostname == "localhost" || net.ParseIP(hostname) != nil && net.ParseIP(hostname).IsLoopback()
+
+	if scheme != "https" {
+		if scheme != "http" {
+			return out, fmt.Errorf("config.url must use https or http")
+		}
+		if !isPrivateOrLocalHTTPHost(hostname) {
+			return out, fmt.Errorf("config.url may use http only for localhost, host.docker.internal, or private network hosts")
+		}
+	}
+
+	resolveLocalhost, _ := raw["resolve_localhost_to_host_docker_internal"].(bool)
+	if resolveLocalhost && isLoopbackHost {
+		if port := parsedURL.Port(); strings.TrimSpace(port) != "" {
+			parsedURL.Host = "host.docker.internal:" + port
+		} else {
+			parsedURL.Host = "host.docker.internal"
+		}
+		out.URL = parsedURL.String()
+	}
+
+	if timeoutRaw, ok := raw["request_timeout_seconds"]; ok {
+		switch v := timeoutRaw.(type) {
+		case float64:
+			if v >= 1 && v <= 120 {
+				out.RequestTimeoutSeconds = int(v)
+			}
+		case int:
+			if v >= 1 && v <= 120 {
+				out.RequestTimeoutSeconds = v
+			}
+		}
+	}
+	return out, nil
+}
+
+// isPrivateOrLocalHTTPHost reports whether a plain http MCP endpoint may talk
+// to the given host. Plain http is only sensible on trusted networks, so it is
+// allowed for loopback, host.docker.internal and any host that resolves to a
+// private/loopback/link-local address (docker containers, sandboxes, LAN).
+// Hostnames that cannot be resolved are rejected (fail closed).
+func isPrivateOrLocalHTTPHost(hostname string) bool {
+	if hostname == "localhost" || hostname == "host.docker.internal" {
+		return true
+	}
+	if ip := net.ParseIP(hostname); ip != nil {
+		return isPrivateOrLocalIP(ip)
+	}
+	ips, err := net.LookupHost(hostname)
+	if err != nil {
+		return false
+	}
+	for _, ipRaw := range ips {
+		if ip := net.ParseIP(ipRaw); ip != nil && isPrivateOrLocalIP(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func isPrivateOrLocalIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+}
+
+func parseMCPAuthHeaders(raw map[string]interface{}) map[string]string {
+	headers := map[string]string{}
+	if raw == nil {
+		return headers
+	}
+	if accessTokenRaw, ok := raw["access_token"]; ok {
+		if accessToken, ok := accessTokenRaw.(string); ok {
+			trimmed := strings.TrimSpace(accessToken)
+			if trimmed != "" {
+				tokenType := "Bearer"
+				if tokenTypeRaw, ok := raw["token_type"].(string); ok {
+					tokenTypeCandidate := strings.TrimSpace(tokenTypeRaw)
+					if tokenTypeCandidate != "" {
+						if strings.EqualFold(tokenTypeCandidate, "bearer") {
+							tokenType = "Bearer"
+						} else {
+							tokenType = tokenTypeCandidate
+						}
+					}
+				}
+				headers["Authorization"] = tokenType + " " + trimmed
+			}
+		}
+	}
+	if bearerRaw, ok := raw["bearer_token"]; ok {
+		if bearer, ok := bearerRaw.(string); ok {
+			trimmed := strings.TrimSpace(bearer)
+			if trimmed != "" {
+				headers["Authorization"] = "Bearer " + trimmed
+			}
+		}
+	}
+	if headersRaw, ok := raw["headers"].(map[string]interface{}); ok {
+		for key, value := range headersRaw {
+			name := strings.TrimSpace(key)
+			if name == "" {
+				continue
+			}
+			if strValue, ok := value.(string); ok {
+				trimmed := strings.TrimSpace(strValue)
+				if trimmed != "" {
+					headers[name] = trimmed
+				}
+			}
+		}
+	}
+	return headers
+}
+
+func mcpDoRequest(config mcpIntegrationConfig, auth map[string]interface{}, method string, params interface{}, extraHeaders map[string]string) (mcpRPCResponse, http.Header, error) {
+	isNotificationMethod := strings.HasPrefix(strings.ToLower(strings.TrimSpace(method)), "notifications/")
+	reqBody := mcpRPCRequest{JSONRPC: "2.0", Method: method, Params: params}
+	if !isNotificationMethod {
+		reqBody.ID = "open-chat"
+	}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return mcpRPCResponse{}, nil, err
+	}
+	req, err := http.NewRequest(http.MethodPost, config.URL, bytes.NewReader(body))
+	if err != nil {
+		return mcpRPCResponse{}, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream, application/x-ndjson")
+	for key, value := range parseMCPAuthHeaders(auth) {
+		req.Header.Set(key, value)
+	}
+	for key, value := range extraHeaders {
+		if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
+			continue
+		}
+		req.Header.Set(key, value)
+	}
+	client := &http.Client{Timeout: time.Duration(config.RequestTimeoutSeconds) * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return mcpRPCResponse{}, nil, err
+	}
+	defer resp.Body.Close()
+	headers := resp.Header.Clone()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return mcpRPCResponse{}, headers, fmt.Errorf("mcp request failed: %s: %s", resp.Status, strings.TrimSpace(string(payload)))
+	}
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	if err != nil {
+		return mcpRPCResponse{}, headers, err
+	}
+	if len(strings.TrimSpace(string(responseBody))) == 0 {
+		if isNotificationMethod || resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusAccepted {
+			return mcpRPCResponse{JSONRPC: "2.0", ID: nil, Result: json.RawMessage(`{}`)}, headers, nil
+		}
+	}
+	parsed, err := parseMCPResponseBody(responseBody)
+	if err != nil {
+		return mcpRPCResponse{}, headers, err
+	}
+	if parsed.Error != nil {
+		return mcpRPCResponse{}, headers, fmt.Errorf("mcp error %d: %s", parsed.Error.Code, parsed.Error.Message)
+	}
+	return parsed, headers, nil
+}
+
+func isServerNotInitializedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(strings.TrimSpace(err.Error())), "server not initialized")
+}
+
+func isMethodNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(msg, "method not found") || strings.Contains(msg, "-32601")
+}
+
+func mcpInitializeSession(config mcpIntegrationConfig, auth map[string]interface{}) (map[string]string, error) {
+	initializeParams := map[string]interface{}{
+		"protocolVersion": "2025-03-26",
+		"capabilities":    map[string]interface{}{},
+		"clientInfo": map[string]interface{}{
+			"name":    "open-chat-go",
+			"version": "dev",
+		},
+	}
+	_, headers, err := mcpDoRequest(config, auth, "initialize", initializeParams, nil)
+	if err != nil {
+		return nil, err
+	}
+	extraHeaders := map[string]string{}
+	sessionID := strings.TrimSpace(headers.Get("Mcp-Session-Id"))
+	if sessionID != "" {
+		extraHeaders["Mcp-Session-Id"] = sessionID
+	}
+	_, _, initNotifyErr := mcpDoRequest(config, auth, "notifications/initialized", map[string]interface{}{}, extraHeaders)
+	if initNotifyErr != nil && !isMethodNotFoundError(initNotifyErr) {
+		return nil, initNotifyErr
+	}
+	return extraHeaders, nil
+}
+
+// mcpSessionCache keeps the negotiated MCP streamable session headers per
+// server identity so stateful MCP servers (e.g. the Playwright MCP, where
+// every session owns a browser context) keep working across separate tool
+// calls. Stateless servers never return a session id and are unaffected.
+var mcpSessionCache sync.Map
+
+func mcpSessionKey(config mcpIntegrationConfig, auth map[string]interface{}) string {
+	digest := sha256.New()
+	io.WriteString(digest, config.Transport)
+	io.WriteString(digest, "\x00")
+	io.WriteString(digest, config.URL)
+	// Map iteration order is non-deterministic; sort the header names so the
+	// same auth input always yields the same session key.
+	authHeaders := parseMCPAuthHeaders(auth)
+	names := make([]string, 0, len(authHeaders))
+	for name := range authHeaders {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		io.WriteString(digest, "\x00"+name+"="+authHeaders[name])
+	}
+	return hex.EncodeToString(digest.Sum(nil))
+}
+
+func isSessionExpiredError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return isServerNotInitializedError(err) ||
+		(strings.Contains(msg, "mcp request failed: 404") && strings.Contains(msg, "session")) ||
+		strings.Contains(msg, "session not found") ||
+		strings.Contains(msg, "invalid session") ||
+		strings.Contains(msg, "session expired")
+}
+
+func mcpCall(config mcpIntegrationConfig, auth map[string]interface{}, method string, params interface{}) (mcpRPCResponse, error) {
+	cacheKey := mcpSessionKey(config, auth)
+	if cachedHeaders, ok := mcpSessionCache.Load(cacheKey); ok {
+		response, _, err := mcpDoRequest(config, auth, method, params, cachedHeaders.(map[string]string))
+		if err == nil {
+			return response, nil
+		}
+		// Fall through and establish a fresh session for retry.
+		if !isSessionExpiredError(err) {
+			return mcpRPCResponse{}, err
+		}
+		mcpSessionCache.Delete(cacheKey)
+	}
+	sessionHeaders, initErr := mcpInitializeSession(config, auth)
+	if initErr != nil {
+		return mcpRPCResponse{}, fmt.Errorf("mcp initialize failed: %w", initErr)
+	}
+	response, _, err := mcpDoRequest(config, auth, method, params, sessionHeaders)
+	if err != nil {
+		return mcpRPCResponse{}, err
+	}
+	if len(sessionHeaders) > 0 {
+		mcpSessionCache.Store(cacheKey, sessionHeaders)
+	}
+	return response, nil
+}
+
+func parseMCPResponseBody(body []byte) (mcpRPCResponse, error) {
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed == "" {
+		return mcpRPCResponse{}, fmt.Errorf("empty mcp response")
+	}
+	if strings.HasPrefix(trimmed, "{") {
+		var parsed mcpRPCResponse
+		if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+			return mcpRPCResponse{}, err
+		}
+		return parsed, nil
+	}
+	lines := strings.Split(trimmed, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "data:") {
+			line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		}
+		if line == "" || line == "[DONE]" || !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var parsed mcpRPCResponse
+		if err := json.Unmarshal([]byte(line), &parsed); err == nil {
+			return parsed, nil
+		}
+	}
+	return mcpRPCResponse{}, fmt.Errorf("invalid mcp response payload")
+}
+
+func DiscoverMCPTools(config map[string]interface{}, auth map[string]interface{}) ([]map[string]interface{}, error) {
+	parsed, err := parseMCPIntegrationConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := mcpCall(parsed, auth, "tools/list", map[string]interface{}{})
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]interface{}{}
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return nil, fmt.Errorf("invalid tools/list result: %w", err)
+	}
+	rawTools, ok := result["tools"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("tools/list result missing tools array")
+	}
+	rows := make([]map[string]interface{}, 0, len(rawTools))
+	for _, raw := range rawTools {
+		tool, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := tool["name"].(string)
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		rows = append(rows, tool)
+	}
+	return rows, nil
+}
+
+func BuildMCPToolsSnapshotFromIntegrations(rows []MCPIntegrationConfig) (map[string]interface{}, []string, error) {
+	snapshot := map[string]interface{}{}
+	toolNames := []string{}
+	for _, row := range rows {
+		config := map[string]interface{}{}
+		auth := map[string]interface{}{}
+		if len(row.Config) > 0 {
+			if err := json.Unmarshal(row.Config, &config); err != nil {
+				return nil, nil, fmt.Errorf("invalid integration config for %q: %w", row.Name, err)
+			}
+		}
+		if len(row.AuthData) > 0 {
+			if err := json.Unmarshal(row.AuthData, &auth); err != nil {
+				return nil, nil, fmt.Errorf("invalid integration auth_data for %q: %w", row.Name, err)
+			}
+		}
+		tools, err := DiscoverMCPTools(config, auth)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to discover MCP tools for %q: %w", row.Name, err)
+		}
+		for _, remoteTool := range tools {
+			remoteName, _ := remoteTool["name"].(string)
+			remoteName = strings.TrimSpace(remoteName)
+			if remoteName == "" {
+				continue
+			}
+			namespacedName := "mcp:" + row.Name + ":" + remoteName
+			snapshot[namespacedName] = map[string]interface{}{
+				"name":             namespacedName,
+				"integration_name": row.Name,
+				"remote_tool_name": remoteName,
+				"description":      remoteTool["description"],
+				"input_schema":     remoteTool["inputSchema"],
+				"config":           config,
+				"auth_data":        auth,
+			}
+			toolNames = append(toolNames, namespacedName)
+		}
+	}
+	sort.Strings(toolNames)
+	return snapshot, toolNames, nil
+}

@@ -1,7 +1,6 @@
 package mcpintegration
 
 import (
-	"backend/database"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -70,13 +69,13 @@ func normalizeBootstrapOwnerRefs(perEntryOwner string, perEntryOwners []string, 
 	return out
 }
 
-func resolveBootstrapOwnerByReference(db *gorm.DB, reference string) (*database.User, error) {
+func resolveBootstrapOwnerByReference(db *gorm.DB, reference string) (*User, error) {
 	ref := strings.TrimSpace(reference)
 	if ref == "" {
 		return nil, fmt.Errorf("owner reference is required")
 	}
 
-	var user database.User
+	var user User
 	if err := db.Where("username = ?", ref).First(&user).Error; err == nil {
 		return &user, nil
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -168,8 +167,8 @@ func ApplyBootstrap(db *gorm.DB, spec BootstrapSpec) (BootstrapResult, error) {
 		return result, fmt.Errorf("db is required")
 	}
 
-	ownerCache := map[string]*database.User{}
-	resolveOwner := func(reference string) (*database.User, error) {
+	ownerCache := map[string]*User{}
+	resolveOwner := func(reference string) (*User, error) {
 		norm := strings.ToLower(strings.TrimSpace(reference))
 		if norm == "" {
 			return nil, fmt.Errorf("owner reference is required")
@@ -228,7 +227,7 @@ func ApplyBootstrap(db *gorm.DB, spec BootstrapSpec) (BootstrapResult, error) {
 					}
 					authData = encoded
 				}
-				row := database.MCPIntegrationConfig{
+				row := MCPIntegrationConfig{
 					OwnerUserId: owner.ID,
 					Name:        req.Name,
 					Config:      configJSON,
