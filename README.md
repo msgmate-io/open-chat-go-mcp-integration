@@ -23,6 +23,25 @@ The MCP integration lets each user register one or more remote MCP servers and u
 - The MCP servers page renders these fields dynamically in the connect dialog.
 - If `connect_fields` is missing, the UI falls back to generic OAuth defaults (`client_id`, `client_secret`, `redirect_uri`).
 
+## OAuth redirects and token caching
+
+- The OAuth `redirect_uri` follows the server host: an empty or loopback
+  (`localhost`/`127.0.0.1`) `config.auth.redirect_uri` is replaced at
+  `auth/start` with `<public-base-url>/callback`, where the public base URL is
+  `PUBLIC_BASE_URL` when set and otherwise derived from the request's
+  `X-Forwarded-Host`/`Host` + scheme. A non-loopback `redirect_uri` is honoured
+  as-is, so deployments can register a custom callback path.
+- For providers that support dynamic client registration (eg the hosted Figma
+  MCP), `client_id`/`client_secret` may be left empty; a client is registered on
+  first connect and the credentials are persisted with the token so later
+  refreshes work.
+- Completed credentials (including `refresh_token`/`expires_in`) are cached on
+  the owner-scoped server row (`auth_data`). When an access token is at/near
+  expiry and a `refresh_token` is present, the integration transparently
+  refreshes and re-persists it during status/discovery and whenever an owner's
+  servers are resolved (eg by the opencode integration), so a previously
+  authorized server keeps working without re-authenticating.
+
 ## Typical usage
 
 1. Open `/integrations/mcp/servers`

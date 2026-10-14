@@ -70,6 +70,29 @@ function authConfigFromRow(row: MCPServerRow): Record<string, unknown> {
   return {};
 }
 
+// isLoopbackRedirect reports whether a stored redirect_uri is an empty or
+// loopback placeholder (eg the localhost default baked into a template). Such
+// values must be replaced by the current origin so a deployed instance does not
+// redirect the OAuth callback back to localhost.
+function isLoopbackRedirect(value: string): boolean {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) {
+    return true;
+  }
+  try {
+    const host = new URL(trimmed).hostname.toLowerCase();
+    return (
+      host === "localhost" ||
+      host === "0.0.0.0" ||
+      host === "127.0.0.1" ||
+      host === "::1" ||
+      host === "[::1]"
+    );
+  } catch {
+    return false;
+  }
+}
+
 function hostDefaultsForRow(
   row: MCPServerRow,
 ): {
@@ -260,6 +283,14 @@ export default function MCPServersPage() {
     const initialValues: Record<string, string> = {};
     for (const field of fields) {
       const rawValue = currentAuth[field.key];
+      if (
+        field.key === "redirect_uri" &&
+        typeof rawValue === "string" &&
+        isLoopbackRedirect(rawValue)
+      ) {
+        initialValues[field.key] = hostDefaults.defaultRedirect;
+        continue;
+      }
       if (typeof rawValue === "string") {
         initialValues[field.key] = rawValue;
         continue;

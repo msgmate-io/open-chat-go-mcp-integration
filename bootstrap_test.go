@@ -156,6 +156,35 @@ func TestApplyBootstrapPlainNoAuthServer(t *testing.T) {
 	}
 }
 
+func TestApplyBootstrapFigmaTemplateWithoutClientCredentials(t *testing.T) {
+	db := setupMCPIntegrationTestDB(t)
+	owner := createUserForMCPIntegrationTest(t, db, "admin-figma@example.com")
+
+	// Figma's hosted MCP supports OAuth2 dynamic client registration, so a
+	// pre-configured server only needs the template (no client_id/secret).
+	result, err := ApplyBootstrap(db, BootstrapSpec{
+		FallbackOwner: owner.Username,
+		Servers:       []BootstrapServerSpec{{Name: "figma", Template: "figma"}},
+	})
+	if err != nil {
+		t.Fatalf("figma bootstrap failed: %v", err)
+	}
+	if result.ServersCreated != 1 {
+		t.Fatalf("unexpected counts: %+v", result)
+	}
+	row, err := loadOwnedServer(db, owner.ID, "figma")
+	if err != nil {
+		t.Fatalf("seeded figma row missing: %v", err)
+	}
+	config := loadConfigMap(t, row.Config)
+	if config["url"] != "https://mcp.figma.com/mcp" {
+		t.Fatalf("figma template url not merged: %+v", config)
+	}
+	if mode := authModeFromConfig(config); mode != "oauth2" {
+		t.Fatalf("expected oauth2 mode, got %q", mode)
+	}
+}
+
 func TestApplyBootstrapErrors(t *testing.T) {
 	db := setupMCPIntegrationTestDB(t)
 	owner := createUserForMCPIntegrationTest(t, db, "admin-errors@example.com")

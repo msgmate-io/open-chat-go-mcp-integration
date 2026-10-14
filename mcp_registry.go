@@ -282,10 +282,15 @@ func ResolveMCPServerSpecs(db *gorm.DB, ownerUserID uint, names []string) ([]MCP
 		return nil, err
 	}
 	out := make([]MCPServerSpec, 0, len(rows))
-	for _, row := range rows {
+	for i := range rows {
+		row := rows[i]
 		if !row.Enabled {
 			continue
 		}
+		// Refresh an expired OAuth access token in place so consumers (eg the
+		// opencode integration) render a usable credential without forcing the
+		// user through the authorization flow again.
+		ensureFreshOAuthAuthData(db, &row)
 		out = append(out, resolveMCPServerSpecFromRow(row))
 	}
 	return out, nil

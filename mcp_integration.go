@@ -3,6 +3,7 @@ package mcpintegration
 import (
 	"backend/api/msgmate"
 	"backend/database"
+	"backend/runtimecfg"
 	"backend/server/util"
 	"context"
 	"crypto/rand"
@@ -14,6 +15,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -351,9 +353,6 @@ func inferredOAuthConfig(config map[string]interface{}) map[string]interface{} {
 		if v, _ := out["token_url"].(string); strings.TrimSpace(v) == "" {
 			out["token_url"] = "https://api.figma.com/v1/oauth/token"
 		}
-		if v, _ := out["redirect_uri"].(string); strings.TrimSpace(v) == "" {
-			out["redirect_uri"] = "http://localhost:1984/callback"
-		}
 		if _, ok := out["scopes"]; !ok {
 			out["scopes"] = []string{"file_content:read"}
 		}
@@ -368,9 +367,6 @@ func inferredOAuthConfig(config map[string]interface{}) map[string]interface{} {
 		if v, _ := out["token_url"].(string); strings.TrimSpace(v) == "" {
 			out["token_url"] = "https://oauth2.googleapis.com/token"
 		}
-		if v, _ := out["redirect_uri"].(string); strings.TrimSpace(v) == "" {
-			out["redirect_uri"] = "http://localhost:1984/callback"
-		}
 		if _, ok := out["scopes"]; !ok {
 			out["scopes"] = []string{
 				"https://www.googleapis.com/auth/drive.readonly",
@@ -382,6 +378,74 @@ func inferredOAuthConfig(config map[string]interface{}) map[string]interface{} {
 		}
 	}
 	return out
+}
+
+// requestPublicBaseURL derives the externally visible origin of the current
+// request. An explicit PUBLIC_BASE_URL wins (so a deployment can pin the
+// canonical origin); otherwise it is reconstructed from the proxy headers /
+// Host, so an OAuth redirect always returns to the host the user is on instead
+// of a hard-coded localhost. Mirrors the helpers used elsewhere in the backend.
+func requestPublicBaseURL(r *http.Request) string {
+	if configured := strings.TrimRight(strings.TrimSpace(runtimecfg.PublicBaseURL()), "/"); configured != "" {
+		return configured
+	}
+	if r == nil {
+		return ""
+	}
+	host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
+	if host == "" {
+		host = strings.TrimSpace(r.Host)
+	}
+	if commaIdx := strings.Index(host, ","); commaIdx >= 0 {
+		host = strings.TrimSpace(host[:commaIdx])
+	}
+	if host == "" {
+		return ""
+	}
+	scheme := "http"
+	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		scheme = "https"
+	}
+	return scheme + "://" + host
+}
+
+// isLoopbackRedirectURI reports whether a configured redirect URI points at a
+// loopback/unspecified host, i.e. a development placeholder that must not leak
+// into a deployed instance.
+func isLoopbackRedirectURI(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return true
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	if host == "" {
+		return false
+	}
+	if host == "localhost" || host == "0.0.0.0" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsUnspecified()
+	}
+	return false
+}
+
+// resolveOAuthRedirectURI returns the redirect URI to use for an OAuth2 flow.
+// A configured non-loopback URI is honoured as-is (deployments may register a
+// custom callback path); an empty or loopback placeholder is replaced by
+// "<public-base-url>/callback" so the redirect follows the server host.
+func resolveOAuthRedirectURI(authCfg map[string]interface{}, r *http.Request) string {
+	configured, _ := authCfg["redirect_uri"].(string)
+	configured = strings.TrimSpace(configured)
+	base := requestPublicBaseURL(r)
+	if !isLoopbackRedirectURI(configured) || base == "" {
+		return configured
+	}
+	return base + "/callback"
 }
 
 func parseWWWAuthenticateParams(headerValue string) map[string]string {
@@ -936,7 +1000,9 @@ func refreshOwnerBotMCPToolSnapshots(DB *gorm.DB, ownerUserID uint) error {
 		return err
 	}
 	rowsByName := map[string]database.MCPIntegrationConfig{}
-	for _, row := range enabledMCPRows {
+	for i := range enabledMCPRows {
+		row := enabledMCPRows[i]
+		ensureFreshOAuthAuthData(DB, &row)
 		rowsByName[strings.ToLower(strings.TrimSpace(row.Name))] = row
 	}
 
@@ -1056,16 +1122,15 @@ func validateServerRequest(req serverUpsertRequest) (serverUpsertRequest, error)
 		authCfg := inferredOAuthConfig(req.Config)
 		authorizeURL, _ := authCfg["authorize_url"].(string)
 		tokenURL, _ := authCfg["token_url"].(string)
-		redirectURI, _ := authCfg["redirect_uri"].(string)
 		if strings.TrimSpace(authorizeURL) == "" {
 			return req, fmt.Errorf("config.auth.authorize_url is required for oauth2")
 		}
 		if strings.TrimSpace(tokenURL) == "" {
 			return req, fmt.Errorf("config.auth.token_url is required for oauth2")
 		}
-		if strings.TrimSpace(redirectURI) == "" {
-			return req, fmt.Errorf("config.auth.redirect_uri is required for oauth2")
-		}
+		// redirect_uri is optional: when unset (or a loopback placeholder) the
+		// auth/start handler derives it from the request's public base URL so
+		// the redirect follows the server host instead of a baked-in localhost.
 	}
 	return req, nil
 }
@@ -1308,7 +1373,7 @@ func discoverServer(w http.ResponseWriter, r *http.Request) {
 	}
 	config := map[string]interface{}{}
 	_ = json.Unmarshal(row.Config, &config)
-	auth := extractAuthData(row.AuthData)
+	auth := ensureFreshOAuthAuthData(DB, &row)
 	tools, err := msgmate.DiscoverMCPTools(config, auth)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Discovery failed: %v", err), http.StatusBadGateway)
@@ -1357,7 +1422,7 @@ func authStatus(w http.ResponseWriter, r *http.Request) {
 
 	config := map[string]interface{}{}
 	_ = json.Unmarshal(row.Config, &config)
-	auth := extractAuthData(row.AuthData)
+	auth := ensureFreshOAuthAuthData(DB, &row)
 	session := decodeStoredOAuthSession(row.AuthSession)
 	status := authStatusFor(config, auth, session)
 	authKeys := sortedMapKeys(auth)
@@ -1527,7 +1592,7 @@ func authStart(w http.ResponseWriter, r *http.Request) {
 		authorizeURLRaw := discovered.AuthorizeURL
 		clientID, _ := authCfg["client_id"].(string)
 		clientSecret, _ := authCfg["client_secret"].(string)
-		redirectURI, _ := authCfg["redirect_uri"].(string)
+		redirectURI := resolveOAuthRedirectURI(authCfg, r)
 		if strings.TrimSpace(authorizeURLRaw) == "" || strings.TrimSpace(redirectURI) == "" {
 			http.Error(w, "config.auth.authorize_url and config.auth.redirect_uri are required", http.StatusBadRequest)
 			return
@@ -1718,8 +1783,202 @@ func oauthTokenExchange(authCfg map[string]interface{}, req authCompleteRequest,
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("invalid token response JSON: %w", err)
 	}
+	// Persist the client credentials / endpoints that were used so a later
+	// refresh_token exchange works even when they were obtained through dynamic
+	// client registration and are not present in the stored server config.
+	if strings.TrimSpace(clientID) != "" {
+		if _, ok := result["client_id"]; !ok {
+			result["client_id"] = strings.TrimSpace(clientID)
+		}
+	}
+	if strings.TrimSpace(clientSecret) != "" {
+		if _, ok := result["client_secret"]; !ok {
+			result["client_secret"] = strings.TrimSpace(clientSecret)
+		}
+	}
+	if strings.TrimSpace(tokenURLRaw) != "" {
+		if _, ok := result["token_url"]; !ok {
+			result["token_url"] = strings.TrimSpace(tokenURLRaw)
+		}
+	}
+	if strings.TrimSpace(session.Resource) != "" {
+		if _, ok := result["resource"]; !ok {
+			result["resource"] = strings.TrimSpace(session.Resource)
+		}
+	}
 	result["obtained_at_unix"] = time.Now().Unix()
 	return result, nil
+}
+
+// oauthTokenResponseExpiry returns the absolute expiry time of a stored OAuth
+// token response, or the zero time when the provider did not send expires_in.
+func oauthTokenResponseExpiry(authData map[string]interface{}) time.Time {
+	expiresIn := 0
+	switch v := authData["expires_in"].(type) {
+	case float64:
+		expiresIn = int(v)
+	case int:
+		expiresIn = v
+	case int64:
+		expiresIn = int(v)
+	case json.Number:
+		if parsed, err := v.Int64(); err == nil {
+			expiresIn = int(parsed)
+		}
+	}
+	if expiresIn <= 0 {
+		return time.Time{}
+	}
+	obtained := int64(0)
+	switch v := authData["obtained_at_unix"].(type) {
+	case float64:
+		obtained = int64(v)
+	case int64:
+		obtained = v
+	case int:
+		obtained = int64(v)
+	case json.Number:
+		if parsed, err := v.Int64(); err == nil {
+			obtained = parsed
+		}
+	}
+	if obtained == 0 {
+		return time.Time{}
+	}
+	return time.Unix(obtained, 0).Add(time.Duration(expiresIn) * time.Second)
+}
+
+// oauthAuthDataNeedsRefresh reports whether stored OAuth credentials carry a
+// refresh_token and are at (or within a minute of) expiry. Tokens without an
+// expires_in are treated as non-expiring and never refreshed.
+func oauthAuthDataNeedsRefresh(authData map[string]interface{}) bool {
+	refreshToken, _ := authData["refresh_token"].(string)
+	if strings.TrimSpace(refreshToken) == "" {
+		return false
+	}
+	expiry := oauthTokenResponseExpiry(authData)
+	if expiry.IsZero() {
+		return false
+	}
+	return time.Now().Add(60 * time.Second).After(expiry)
+}
+
+// oauthTokenRefresh exchanges a stored refresh_token for a fresh access token,
+// preserving the previous refresh token when the provider does not rotate it.
+// Client credentials / token URL are taken from the server config first and
+// fall back to the values persisted alongside the token (dynamic registration).
+func oauthTokenRefresh(authCfg map[string]interface{}, authData map[string]interface{}) (map[string]interface{}, error) {
+	tokenURLRaw, _ := authCfg["token_url"].(string)
+	tokenURLRaw = strings.TrimSpace(tokenURLRaw)
+	if tokenURLRaw == "" {
+		tokenURLRaw, _ = authData["token_url"].(string)
+		tokenURLRaw = strings.TrimSpace(tokenURLRaw)
+	}
+	clientID, _ := authCfg["client_id"].(string)
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		clientID, _ = authData["client_id"].(string)
+		clientID = strings.TrimSpace(clientID)
+	}
+	clientSecret, _ := authCfg["client_secret"].(string)
+	clientSecret = strings.TrimSpace(clientSecret)
+	if clientSecret == "" {
+		clientSecret, _ = authData["client_secret"].(string)
+		clientSecret = strings.TrimSpace(clientSecret)
+	}
+	refreshToken, _ := authData["refresh_token"].(string)
+	refreshToken = strings.TrimSpace(refreshToken)
+	if tokenURLRaw == "" {
+		return nil, fmt.Errorf("config.auth.token_url is required")
+	}
+	if clientID == "" {
+		return nil, fmt.Errorf("config.auth.client_id is required")
+	}
+	if refreshToken == "" {
+		return nil, fmt.Errorf("stored auth_data has no refresh_token")
+	}
+
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", refreshToken)
+	form.Set("client_id", clientID)
+	if clientSecret != "" {
+		form.Set("client_secret", clientSecret)
+	}
+	if resource, _ := authData["resource"].(string); strings.TrimSpace(resource) != "" {
+		form.Set("resource", strings.TrimSpace(resource))
+	}
+
+	httpReq, err := http.NewRequest(http.MethodPost, tokenURLRaw, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	httpReq.Header.Set("Accept", "application/json")
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, fmt.Errorf("refresh request failed: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	result := map[string]interface{}{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("invalid refresh response JSON: %w", err)
+	}
+	if _, ok := result["refresh_token"]; !ok {
+		result["refresh_token"] = refreshToken
+	}
+	if _, ok := result["client_id"]; !ok && clientID != "" {
+		result["client_id"] = clientID
+	}
+	if _, ok := result["client_secret"]; !ok && clientSecret != "" {
+		result["client_secret"] = clientSecret
+	}
+	if _, ok := result["token_url"]; !ok && tokenURLRaw != "" {
+		result["token_url"] = tokenURLRaw
+	}
+	if resource, _ := authData["resource"].(string); strings.TrimSpace(resource) != "" {
+		if _, ok := result["resource"]; !ok {
+			result["resource"] = strings.TrimSpace(resource)
+		}
+	}
+	result["obtained_at_unix"] = time.Now().Unix()
+	return result, nil
+}
+
+// ensureFreshOAuthAuthData refreshes and persists an expired OAuth access token
+// using the stored refresh_token, so a previously authorized MCP server keeps
+// working without a manual re-authentication. A nil db or a token that cannot
+// (or need not) be refreshed is returned unchanged.
+func ensureFreshOAuthAuthData(db *gorm.DB, row *database.MCPIntegrationConfig) map[string]interface{} {
+	authData := extractAuthData(row.AuthData)
+	if db == nil || row == nil || !oauthAuthDataNeedsRefresh(authData) {
+		return authData
+	}
+	config := map[string]interface{}{}
+	_ = json.Unmarshal(row.Config, &config)
+	authCfg := inferredOAuthConfig(config)
+	refreshed, err := oauthTokenRefresh(authCfg, authData)
+	if err != nil {
+		log.Printf("mcp oauth refresh failed for server %s: %v", row.Name, err)
+		return authData
+	}
+	encoded, err := json.Marshal(refreshed)
+	if err != nil {
+		return authData
+	}
+	if err := db.Model(row).Update("auth_data", json.RawMessage(encoded)).Error; err != nil {
+		log.Printf("mcp oauth refresh persist failed for server %s: %v", row.Name, err)
+		return authData
+	}
+	row.AuthData = encoded
+	return refreshed
 }
 
 // Auth complete
