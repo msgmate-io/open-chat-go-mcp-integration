@@ -402,6 +402,60 @@ func DiscoverMCPTools(config map[string]interface{}, auth map[string]interface{}
 	return rows, nil
 }
 
+// CallMCPTool invokes one tool on a resolved MCP server and returns its result
+// as text. `config` and `auth` are the same resolved spec maps DiscoverMCPTools
+// consumes (the ones stored in a chat's `mcp_tools` snapshot under `config` /
+// `auth_data`), so a caller that already holds a server snapshot can call its
+// tools without re-resolving the integration.
+//
+// When the server returns MCP content blocks the text parts are concatenated;
+// otherwise the JSON result is returned. A tools/call that reports
+// isError=true (or a JSON-RPC error) is returned as an error so the caller
+// never mistakes a failed MCP call for a successful one.
+func CallMCPTool(config map[string]interface{}, auth map[string]interface{}, toolName string, arguments map[string]interface{}) (string, error) {
+	name := strings.TrimSpace(toolName)
+	if name == "" {
+		return "", fmt.Errorf("mcp tool name is required")
+	}
+	parsed, err := parseMCPIntegrationConfig(config)
+	if err != nil {
+		return "", err
+	}
+	if arguments == nil {
+		arguments = map[string]interface{}{}
+	}
+	resp, err := mcpCall(parsed, auth, "tools/call", map[string]interface{}{
+		"name":      name,
+		"arguments": arguments,
+	})
+	if err != nil {
+		return "", err
+	}
+	result := map[string]interface{}{}
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return "", fmt.Errorf("invalid tools/call result: %w", err)
+	}
+	if isError, _ := result["isError"].(bool); isError {
+		resultJSON, _ := json.Marshal(result)
+		return "", fmt.Errorf("mcp tool call returned isError=true: %s", string(resultJSON))
+	}
+	if content, ok := result["content"].([]interface{}); ok && len(content) > 0 {
+		parts := make([]string, 0, len(content))
+		for _, item := range content {
+			if obj, ok := item.(map[string]interface{}); ok {
+				if text, ok := obj["text"].(string); ok && strings.TrimSpace(text) != "" {
+					parts = append(parts, text)
+				}
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, "\n"), nil
+		}
+	}
+	resultJSON, _ := json.Marshal(result)
+	return string(resultJSON), nil
+}
+
 func BuildMCPToolsSnapshotFromIntegrations(rows []MCPIntegrationConfig) (map[string]interface{}, []string, error) {
 	snapshot := map[string]interface{}{}
 	toolNames := []string{}
