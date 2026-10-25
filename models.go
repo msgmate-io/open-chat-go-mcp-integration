@@ -20,7 +20,7 @@ import (
 // Model is the shared gorm base model (UUID primary metadata plus timestamps),
 // mirroring the core database.Model so integration tables keep their schema.
 type Model struct {
-	UUID      string         `gorm:"type:uuid;" json:"uuid"`
+	UUID      string         `gorm:"type:text;" json:"uuid"`
 	ID        uint           `gorm:"primarykey" json:"-"`
 	CreatedAt time.Time      `json:"-"`
 	UpdatedAt time.Time      `json:"-" gorm:"autoUpdateTime"`
